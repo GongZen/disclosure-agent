@@ -1,0 +1,9 @@
+# 평가용 API 서버
+fastapi>=0.115
+uvicorn>=0.32
+requests>=2.32
+
+# 데이터 처리
+pandas>=2.2
+lxml>=5.3
+openpyxl>=3.1

@@ -1,0 +1,18 @@
+# 줄바꿈 정규화 — Windows 개발 환경과 저장소 간 혼선 방지
+* text=auto
+
+*.py   text eol=lf
+*.md   text eol=lf
+*.txt  text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+*.pdf  binary
+*.xlsx binary
+*.png  binary
+*.jpg  binary
