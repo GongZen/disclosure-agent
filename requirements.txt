@@ -7,3 +7,4 @@ requests>=2.32
 pandas>=2.2
 lxml>=5.3
 openpyxl>=3.1
+pypdf            # 대체 수집분 PDF 본문 읽기
