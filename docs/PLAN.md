@@ -226,7 +226,7 @@ doc_relation  id PK · from_doc_id · to_doc_id · rel_type 정정/해지/후속
 계약 식별 항목 일치    오연결 26건   FCS 정정본 → 잠수함 원본 · 파나마 정정본 → 샤힌 원본
 ```
 
-시행착오는 `feedback/W3.md` 참조. 열여덟 번 고쳤다.
+시행착오는 `feedback/W3.md` 참조. 적재를 열두 번 다시 했고 그 과정을 열다섯 항목으로 남겼다.
 
 ## 무엇이 해결되나
 
@@ -642,7 +642,7 @@ API 명세서는 FastAPI가 자동 생성한다. `/openapi.json`을 쓰면 직�
 | W1 협업 기반 | SETUP.md·GIT.md는 파트너 합류 시점으로 연기. corpus.py는 W2에 흡수 |
 | W2 기준 계층 | 완료 · `docs/SCHEMA.md` |
 | W3 관계 계층 | 완료 · 연결 가능분 100% · `feedback/W3.md` |
-| W4 정형 이벤트 | 착수 가능 |
+| W4 정형 이벤트 | 완료 · `event_contract` `event_major` `event_holding` · `feedback/W4.md` |
 | W5 재무 사실 | 미착수 |
 | W6 본문 계층 | 미착수 |
 | W7 검색·라우팅 | 미착수 |
@@ -653,9 +653,9 @@ API 명세서는 FastAPI가 자동 생성한다. `/openapi.json`을 쓰면 직�
 ## 다음 할 일
 
 ```
-1  D1 자금조달의 범위      자기주식처분 157건 · 상각형조건부자본증권 71건 본문 확인 필요
-2  D6 주요 계약의 기준      계약명 정규화 규칙을 함께 정한다. 표기가 흔들린다
-3  W4 정형 이벤트 적재      위 둘이 정해져야 category 와 계약 식별자를 채울 수 있다
+1  W5 재무 사실       D3 계정명 통합 · D4 연결/별도 기본값을 먼저 정한다
+2  W6 본문 계층       청킹 규칙 확정 후 임베딩 소요 시간 측정
 ```
 
-D1·D6 은 `docs/GLOSSARY.md`, 계약명 정규화의 근거는 `docs/feedback/W3.md` 참조.
+W4 에서 정한 일곱 걸음과 0번 걸음 점검 항목을 W5 에도 적용한다. `feedback/README.md` 참조.
+D3·D4 는 `docs/GLOSSARY.md`, W4 의 시행착오는 `docs/feedback/W4.md` 참조.

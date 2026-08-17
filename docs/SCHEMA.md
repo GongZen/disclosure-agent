@@ -12,7 +12,9 @@
 |---|---|---|---|
 | 기준 | `company` `document` | W2 | 완료 |
 | 관계 | `doc_relation` | W3 | 완료 |
-| 사실 | `event_funding` `event_contract` `event_holding` | W4 | 미착수 |
+| 사실 | `event_contract` `contract_item` | W4 | 완료 |
+| 사실 | `event_major` `major_item` | W4 | 완료 |
+| 사실 | `event_holding` `holding_item` | W4 | 완료 |
 | 사실 | `fact_financial` | W5 | 미착수 |
 | 본문 | `section` `chunk` | W6 | 미착수 |
 
@@ -390,14 +392,319 @@ KB금융과 한화오션 2건이 여기 있었다. 뷰어 HTML 에 정정 헤더
 
 ---
 
+# 사실 계층 · 계약 — W4 진행 중
+
+문서 안의 값을 꺼내 담는다. 여기까지 오면 "삼성전자가 어떤 계약을 얼마에 땄나"에 SQL로 답할 수 있다.
+
+## event_contract — 1,169행
+
+거래소 계약 공시 전건이다. 체결 1,106 · 해지 20 · 신규시설투자 43.
+
+```sql
+event_contract
+  id               INTEGER PK
+  doc_id           TEXT   → document
+  corp_code        TEXT   → company
+  event_type       TEXT   contract | termination | investment
+  form             TEXT   의무 | 자율 | 코스닥 | 해지 | 시설투자
+  disclosure_type  TEXT   mandatory | voluntary
+
+  title            TEXT   원문 표기 그대로
+  title_norm       TEXT   정규화한 값. 같은 계약을 묶는 키
+  category         TEXT   계약 구분 · 투자 구분
+  counterparty     TEXT
+  counterparty_rel TEXT
+  region           TEXT
+
+  amount_krw       INTEGER  계약금액 · 해지금액 · 투자금액
+  amount_fixed     INTEGER  확정 계약금액.   코스닥만
+  amount_cond      INTEGER  조건부 계약금액. 코스닥만
+  base_amount      INTEGER  비교 기준액
+  base_kind        TEXT     revenue | equity
+  ratio_stated     REAL     공시에 적힌 비율
+  ratio_calc       REAL     amount / base * 100
+  ratio_match      INTEGER  둘이 맞는가
+
+  start_date       TEXT   YYYYMMDD
+  end_date         TEXT
+  signed_at        TEXT   계약(수주)일자 · 해지일자 · 이사회결의일
+
+  purpose          TEXT   투자목적.      시설투자만
+  terminate_reason TEXT   해지 주요사유.  해지만
+  hold_until       TEXT
+  hold_reason      TEXT
+  is_large_corp    INTEGER
+  is_correction    INTEGER
+```
+
+### 인덱스
+
+```sql
+ix_ec_corp_signed  (corp_code, signed_at)   기업의 기간별 계약
+ix_ec_corp_title   (corp_code, title_norm)  같은 계약의 판본을 모은다
+ix_ec_type         (event_type)
+ix_ec_doc          (doc_id)
+ix_ec_amount       (amount_krw)
+```
+
+## 서식이 다섯 갈래다
+
+같은 "단일판매·공급계약체결"인데 항목 이름이 다르다. 1,169건 전수를 열어 확인했다.
+
+| 담을 값 | 의무 1,022 | 자율 58 | 코스닥 26 | 해지 20 | 시설투자 43 |
+|---|---|---|---|---|---|
+| 제목 | `- 체결계약명` | `- 세부내용` | `1. 판매ㆍ공급계약 내용` | `- 해지계약명` | `- 투자대상` |
+| 금액 | `계약금액(원)` | `계약금액(원)` | `계약금액 총액(원)` | `해지금액(원)` | `투자금액(원)` |
+| 기준액 | `최근매출액(원)` | `최근매출액(원)` | `최근 매출액(원)` | `최근매출액(원)` | `자기자본(원)` |
+| 기준일 | `7. 계약(수주)일자` | `7. 계약(수주)일` | `8. 계약(수주)일자` | `6. 해지일자` | `5. 이사회결의일(결정일)` |
+
+번호로 찾으면 안 된다. 같은 뜻의 항목이 서식마다 다른 번호를 달고 있다. 항목 이름으로 찾는다.
+
+항목 이름 앞에는 번호나 하이픈이 붙는다. `- 체결계약명`의 하이픈을 빠뜨려 1,022건을 통째로 못 읽은 적이 있다.
+
+## 판본마다 한 행이다
+
+정정본이 원본을 대체하지 않는다. 한 계약이 최대 열두 번까지 정정되므로 그만큼 행이 생긴다.
+
+```
+2023-06-26  원본    계약금액 1,000억
+2025-04-18  정정본  계약금액 1,200억
+2025-07-08  정정본  계약금액 1,400억     → 세 행. doc_id 로 출처를 구분한다
+```
+
+담아두면 최신만 뽑는 것은 쉽지만 최신만 담으면 이력을 되살릴 수 없어서 이쪽을 골랐다. 같은 계약은 `title_norm`으로 묶거나 `doc_relation`으로 따라간다.
+
+## 계약금액이 셋인 서식이 있다
+
+코스닥 서식은 확정분과 조건부를 나눠 적는다. 조건부는 발주처의 추가 발주 같은 조건이 붙어 아직 확정되지 않은 금액이다.
+
+```
+확정 계약금액     8,486,086,000
+조건부 계약금액   -
+계약금액 총액(원) 8,486,086,000
+```
+
+총액만 답하면 안 들어올 수도 있는 돈이 포함된다. 세 값을 다 담아 답변에서 구분해 제시한다.
+
+## 검산으로 걸러낸 것
+
+공시가 스스로 적어둔 비율을 우리가 뽑은 두 값으로 재계산해 대조한다.
+
+```
+일치        1,099건
+불일치          4건
+검산 불가      66건    금액이 "-" 인 공시유보 건
+일치율       99.6%
+```
+
+불일치 4건은 전부 원문 기재가 어긋난 것이다. 회사가 정정하면서 본문 일부 칸을 갱신하지 않았다.
+
+```
+삼성바이오로직스 20230925  정정사항 표는 11.97 인데 본문 비율이 11.79
+현대건설       20260305  표는 5.71 인데 본문이 5.17
+우리기술       20260210  확정은 고쳤는데 총액이 옛 값
+LIG디펜스      20240207  정정본이 아닌데 어긋난다. 원인 미상
+```
+
+값을 고치지 않는다. 모든 답변에 근거 공시를 표시해야 하므로 우리가 고친 값은 근거와 어긋난다. `ratio_match`에 결과만 남겨 답변에서 밝힌다.
+
+원문 오류는 이것 말고 둘 더 있다. 두산퓨얼셀 수주일자가 접수일보다 1년 뒤이고(W3에서 오타로 판명), 우리기술 건은 확정 + 조건부가 총액과 맞지 않는다.
+
+## 값이 비어 있는 건
+
+`amount_krw` 66건, `signed_at` 8건, `title` 6건, `base_amount` 1건이 비어 있다. 전부 원문에 `-`로 적혀 있음을 확인했다. 추출 실패가 아니라 회사가 쓰지 않은 것이고, D7의 `not_disclosed`에 해당한다.
+
+대부분 공시유보다. 계약 상대방과의 비밀유지 약정 때문에 금액과 계약명을 가리고 나중에 재공시한다.
+
+## contract_item — 24,558행
+
+계약 공시 원문의 모든 항목을 이름 그대로 담는다. `event_contract` 컬럼은 자주 쓰는 축만 담으므로 나머지가 버려진다. `계약금ㆍ선급금 유무`, `대금지급 조건 등` 같은 것이 여기 있다.
+
+```sql
+contract_item
+  id          INTEGER PK
+  doc_id      TEXT   → document
+  seq         INTEGER   문서 안 등장 순서
+  item_name   TEXT      표의 항목 경로. "2. 계약내역 > 계약금액(원)"
+  item_value  TEXT      원문 표기 그대로
+```
+
+---
+
+# 사실 계층 · 주요사항보고서 — W4 완료
+
+## event_major — 598행 · major_item — 78,967행
+
+사건 종류가 28가지이고 유형마다 항목이 다르다. 컬럼으로 다 담을 수 없어 둘로 나눴다.
+
+```
+event_major   한 문서에 한 행. 자주 쓰는 축만 컬럼으로. 빠른 조회와 집계
+major_item    한 문서에 여러 행. 원문의 모든 항목. 무엇이든 답할 수 있게
+```
+
+컬럼으로 담을 수 없는 이유가 둘이다.
+
+```
+고유 항목이 678개      그중 442개가 한 유형에만 나온다
+같은 항목이 반복된다    한 문서에 성명 33회 · 지분(%) 33회 · 현지금융 39회
+                     타법인 주식 양수 공시는 대상 법인마다 표가 한 벌씩 붙는다
+```
+
+`event_major`의 주요 컬럼이다.
+
+```sql
+event_major
+  major_kind      28개 유형
+  decided_at      이사회결의일(결정일)
+  amount_krw      주된 금액. 유형마다 다른 항목에서 온다
+  amount_src      그 금액이 어느 항목에서 왔는지
+  use_facility · use_business · use_operation
+  use_debt · use_acquire · use_other · use_total    자금조달의 목적 여섯 갈래
+  check_ok        검산 결과
+  shares_common · shares_other · shares_before · price_share
+  disposal_purpose · method_market · method_block · method_otc · method_etc
+  is_withdrawn · correct_reason                     철회·취소 여부와 사유
+```
+
+## 조회는 라우팅이 먼저다
+
+`event_major`를 먼저 보고 부족하면 `major_item`으로 넘어가는 것이 아니다. 질의를 해석할 때 어디를 볼지 정해진다.
+
+```
+"2025년 자금조달 총액"    집계가 필요하다      →  event_major.amount_krw
+"CB 를 발행한 기업"        유형으로 거른다      →  event_major.major_kind
+"이 합병의 합병비율"       컬럼에 없는 항목     →  major_item
+```
+
+`major_item`이 하는 다른 일이 D7 판정이다. 컬럼이 비었을 때 이유를 가른다.
+
+```
+major_item 에 항목이 있고 값이 "-"      →  not_disclosed   회사가 안 썼다
+major_item 에 항목 자체가 없다          →  not_disclosed   서식에 없는 칸이다
+major_item 에 값이 있는데 컬럼이 비었다   →  extract_failed  우리가 놓쳤다
+```
+
+## 자금조달 유형에 공통 구조가 있다
+
+유상증자와 사채류 네 유형이 자금 용도를 똑같이 여섯 갈래로 나눠 적는다. 이것이 검산 항목이 된다.
+
+```
+사채류        용도 합계 = 사채의 권면총액              102 / 102
+유상증자      용도 합계 ≈ 신주 수 × 발행가액           52 / 52
+자기주식      예정주식 × 주식가격 = 예정금액           157 / 157
+                                                  합계 302건 전부 일치
+```
+
+유상증자에 근사 기호를 쓴 이유가 있다. 용도 합계는 발행제비용을 뺀 금액이라 조달금액보다 작다. LG씨엔에스 건이 1.0% 적었고 대표주관 3사가 붙은 대형 공모였다. 반대로 미세하게 큰 경우도 있는데 발행가액이 반올림된 값이라 곱셈이 근사치이기 때문이다. 그래서 −0.01% ~ +3%를 허용한다.
+
+## 철회·취소는 공시유보와 다르다
+
+값이 비어 있는 것이 같아 보여도 뜻이 반대다.
+
+```
+공시유보     지금은 안 밝히고 유보기한 뒤에 밝힌다      값이 나중에 나온다
+철회·취소    그 증자·합병이 없던 일이 됐다             값이 영영 없다
+```
+
+12건을 찾았다. 정정사유에 철회·취소·해제·가처분이 들어간 건이다.
+
+```
+에스엠 20230306        신주 및 전환사채 발행금지가처분 인용 결정에 따른 계약 해제
+OCI홀딩스 20240408     주식매매 및 현물출자계약 해제에 따른 유상증자 결정 철회
+두산로보틱스 20240829   포괄적 주식교환 계약 해제
+파마리서치 20250708     회사분할결정 철회
+```
+
+"자금조달 목적이 기재되지 않았습니다"로 답하면 틀린다. "이 유상증자는 철회되었습니다"가 맞다.
+
+---
+
+# 사실 계층 · 지분공시 — W4 완료
+
+## event_holding — 1,083행 · holding_item — 1,530,018행
+
+대량보유상황보고서다. 5% 룰 공시라고 부른다. 어떤 회사 주식을 5% 이상
+가지면 신고해야 하고 이후 1% 이상 변동마다 다시 낸다.
+
+앞선 둘과 다른 점이 둘이다. 문서 하나에 항목이 최대 1만 7천 개까지 나오고,
+특별관계자 구간에 성명과 생년월일이 들어 있다.
+
+```
+문서 크기      중앙값 102KB · 최대 3MB
+문서당 항목    중앙값 417 · 평균 1,413 · 최대 17,442
+```
+
+항목이 폭증하는 곳은 세부 변동내역이다. 외국 자산운용사가 보고하면 산하
+펀드가 수백 개이고 펀드마다 한 줄씩 붙는다.
+
+## section 으로 표의 역할을 남긴다
+
+`holding_item` 에 `section` 과 `has_pii` 컬럼을 둔다.
+
+```
+change_detail   653,696 (개인정보)   세부 변동내역
+holding_detail  339,671 (개인정보)   관계별 보유 상세
+related_party   154,494 (개인정보)   특별관계자 명단
+contract        114,220 (개인정보)   담보·대차 계약 당사자
+loan             58,683              대출·담보 조건
+reporter         49,271              보고자의 자산·부채
+holding_total    48,158              변동내역 총괄표
+summary          18,988              요약정보              ← 핵심
+other             1,420 (0.1%)
+```
+
+개인 신상을 담은 항목이 128만 행으로 전체의 84% 다.
+
+`section` 이 필요한 이유가 둘이다. 문서 하나가 HCX 입력 한도를 넘어
+통째로 넣을 수 없고, 묻지 않은 개인 신상이 답변에 딸려 나가면 안 된다.
+
+조회는 폴백이 아니라 라우팅이다. 질의를 해석할 때 어느 구간이 필요한지
+정해지고, 그 구간만 꺼내 넘긴다. 넘기지 않은 것은 답변에 나올 수 없다.
+
+```
+지분을 얼마나 보유했나     summary · holding_total
+특별관계자가 누구인가      related_party        ← 물었으므로 넘긴다
+어느 펀드가 얼마를 샀나    change_detail
+```
+
+## 서식과 보유목적이 정확히 대응한다
+
+```
+일반 607건  =  경영권 영향 607건
+약식 476건  =  단순투자 372건 + 일반투자 104건
+```
+
+서식이 목적에 따라 갈리기 때문이다. 경영권에 영향을 주려는 경우가 일반이고
+단순투자거나 전문투자자면 약식이다. 그래서 일반 서식에는 보유목적 항목이
+따로 없고 서식 자체가 목적을 말한다.
+
+## 검산과 남은 것
+
+```
+보유주식수 ÷ 의결권있는 발행주식총수 × 100 = 보유비율
+   일치 1,073 · 불일치 0 · 값 부족 10
+```
+
+값 부족 10건은 보유수와 비율이 모두 0이다. 지분을 전량 처분해 5% 밑으로
+떨어졌을 때 내는 마지막 보고이고 원문에 0이 적혀 있다.
+
+정식 산정식은 `[A+H / I+H-(E+F+G)] × 100` 이다. H 는 보유잠재주식이고
+E·F·G 는 그중 교환사채권·증권예탁증권·기타다. 우리 검산은 근사식이라
+허용 오차 0.05%p 를 둔다. 자세한 것은 `feedback/W4.md` 참조.
+
+---
+
 # 검증
 
 ```bash
 python scripts/verify_base.py
 python scripts/verify_relation.py
+python scripts/verify_contract.py
+python scripts/verify_major.py
+python scripts/verify_holding.py
 ```
 
-`verify_base.py`는 11개 항목, `verify_relation.py`는 10개 항목을 본다. 행 수와 참조 무결성뿐 아니라 실제 조회 형태로 시험한다.
+`verify_base.py`는 11개 항목, `verify_relation.py`는 10개 항목, `verify_contract.py`는 10개 절을 본다. 행 수와 참조 무결성뿐 아니라 실제 조회 형태로 시험한다.
 
 ## verify_base.py
 
@@ -444,10 +751,20 @@ python scripts/verify_relation.py
 src/corpus.py             코퍼스 루트 자동 탐지 · 경로 정규화 · 원문 읽기
 src/db.py                 연결과 스키마 정의
 src/relation.py           정정 헤더 · 관련공시 파싱
+src/docitem.py            표 구조를 그대로 읽어 항목-값 쌍으로. XML·HTML 공용
+src/contract.py           거래소 계약 공시 서식 판별 · 항목 추출 · 계약명 정규화
+src/major.py              주요사항보고서 항목 추출 · 검산 · 철회 판정
+src/holding.py            지분공시 section 판별 · 개인정보 표시 · 요약 축 추출
 src/build_base.py         W2 적재
 src/build_relation.py     W3 적재
+src/build_contract.py     W4 적재 — event_contract · contract_item
+src/build_major.py        W4 적재 — event_major · major_item
+src/build_holding.py      W4 적재 — event_holding · holding_item
 scripts/verify_base.py    W2 검증
 scripts/verify_relation.py W3 검증
+scripts/verify_contract.py W4 검증 — 계약
+scripts/verify_major.py   W4 검증 — 주요사항
+scripts/verify_holding.py W4 검증 — 지분
 data/corpus.db            생성물 (gitignore)
 ```
 
@@ -458,6 +775,12 @@ python src/build_base.py          # company 70 · document 4,204
 python scripts/verify_base.py
 python src/build_relation.py      # doc_relation 1,024
 python scripts/verify_relation.py
+python src/build_contract.py      # event_contract 1,169 · contract_item 24,558
+python scripts/verify_contract.py
+python src/build_major.py         # event_major 598 · major_item 83,641
+python scripts/verify_major.py
+python src/build_holding.py       # event_holding 1,083 · holding_item 1,530,018
+python scripts/verify_holding.py
 ```
 
 각 적재 스크립트는 자기 테이블을 지우고 다시 쓴다. 몇 번 돌려도 결과가 같다. 의존 패키지는 `requirements.txt` 에 있고, 대체 수집분 PDF 를 읽는 데 `pypdf` 가 필요하다.
