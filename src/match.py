@@ -101,7 +101,40 @@ def match_target(name: str, con: sqlite3.Connection,
                 "candidates": [],
             }
 
-    # 2. 부분 일치. "현대" 처럼 줄여 부르는 경우다.
+    # 2. 분류 부분 일치. "반도체·전자부품" 을 "반도체" 로 줄여 부르는 경우다.
+    #
+    #    sector 값 20종 중 8종이 '·' 로 묶인 복합어다. 사람은 그 한쪽만 부른다.
+    #    여기 도달했다는 것은 1단계에서 기업 완전 일치가 없었다는 뜻이므로,
+    #    분류 이름의 조각으로 읽히는 말은 기업 부분 일치보다 분류를 앞세운다.
+    #
+    #    이 순서가 없으면 "자동차" 가 현대자동차 한 곳으로 조용히 확정된다.
+    #    틀렸다는 신호가 남지 않아 지표 6 안전성에서 가장 위험한 형태다.
+    ghits: list[tuple[str, str]] = []
+    for col in _GROUP_COLS:
+        for k, actual in values[col].items():
+            if key and key in k:
+                ghits.append((col, actual))
+    if ghits:
+        uniq = sorted({a for _, a in ghits})
+        if len(uniq) == 1:
+            col = next(c for c, a in ghits if a == uniq[0])
+            rows = con.execute(
+                f"SELECT corp_code, corp_name, listed_name, sector, industry, market "
+                f"FROM company WHERE {col} = ? ORDER BY corp_name",
+                (uniq[0],),
+            ).fetchall()
+            return {
+                "raw": name, "status": "resolved", "matched_by": col,
+                "kind": "group", "companies": [dict(r) for r in rows],
+                "candidates": [],
+            }
+        # "소비재" 처럼 여러 분류에 걸리는 말이다. 되묻지 않고 후보를 넘긴다.
+        return {
+            "raw": name, "status": "ambiguous", "matched_by": None, "kind": None,
+            "companies": [], "candidates": uniq,
+        }
+
+    # 3. 기업 부분 일치. "현대" 처럼 줄여 부르는 경우다.
     hits: list[tuple[str, str]] = []
     for col in _COMPANY_COLS:
         for k, actual in values[col].items():
@@ -128,7 +161,7 @@ def match_target(name: str, con: sqlite3.Connection,
             "companies": [], "candidates": sorted({a for _, a in names}),
         }
 
-    # 3. 유사도. 오타로 보고 후보만 제시한다. 확정하지 않는다.
+    # 4. 유사도. 오타로 보고 후보만 제시한다. 확정하지 않는다.
     pool = list(values["corp_name"]) + list(values["listed_name"])
     close = difflib.get_close_matches(key, pool, n=3, cutoff=_SIMILARITY_CUTOFF)
     cands = []
