@@ -643,7 +643,7 @@ API 명세서는 FastAPI가 자동 생성한다. `/openapi.json`을 쓰면 직�
 | W2 기준 계층 | 완료 · `docs/SCHEMA.md` |
 | W3 관계 계층 | 완료 · 연결 가능분 100% · `feedback/W3.md` |
 | W4 정형 이벤트 | 완료 · `event_contract` `event_major` `event_holding` · `feedback/W4.md` |
-| W5 재무 사실 | 미착수 |
+| W5 재무 사실 | 완료 · `fact_financial` 38,845행 · `feedback/W5.md` |
 | W6 본문 계층 | 미착수 |
 | W7 검색·라우팅 | 미착수 |
 | W8 답변·검증 | 미착수 |
@@ -653,9 +653,13 @@ API 명세서는 FastAPI가 자동 생성한다. `/openapi.json`을 쓰면 직�
 ## 다음 할 일
 
 ```
-1  W5 재무 사실       D3 계정명 통합 · D4 연결/별도 기본값을 먼저 정한다
-2  W6 본문 계층       청킹 규칙 확정 후 임베딩 소요 시간 측정
+1  W6 본문 계층       청킹 규칙 확정 후 임베딩 소요 시간 측정
+2  W7 검색·라우팅      질의 해석 · 필터 · BM25 + 벡터 · RRF
 ```
+
+W5 에서 D3(업종별 계정 체계) 와 D4(연결 기본값) 를 확정했다. 남은 정의는
+D2 설비투자와 D5 기간 해석이고 W7 직전에 정한다. D2 는 `capex` 로 값이
+담겨 있어 연간 총액과 개별 공시 중 무엇을 쓸지만 정하면 된다.
 
 W4 에서 정한 일곱 걸음과 0번 걸음 점검 항목을 W5 에도 적용한다. `feedback/README.md` 참조.
 D3·D4 는 `docs/GLOSSARY.md`, W4 의 시행착오는 `docs/feedback/W4.md` 참조.

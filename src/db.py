@@ -347,3 +347,48 @@ CREATE INDEX IF NOT EXISTS ix_hi_pii  ON holding_item(has_pii);
 def create_holding_schema(con: sqlite3.Connection) -> None:
     con.executescript(HOLDING_SCHEMA)
     con.commit()
+
+
+# ── 사실 계층 · 재무 ────────────────────────────────────────────────
+# 정기공시 재무제표에서 뽑은 값. 항목 8종을 담는다.
+#
+# 당기 값만 담는다. 사업보고서는 한 문서에 3개년 열이 있어 전기 값까지 담으면
+# 같은 연도가 문서 셋에 들어간다. 소급재작성 225건(21.4%)에서 그 값이 갈리고,
+# 답변에 근거 공시를 표시할 때 어느 문서를 댈지도 정해야 한다.
+# 당기만 담으면 (기업, 연도, 항목)이 문서 하나에 대응한다.
+FACT_FINANCIAL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS fact_financial (
+    fact_id     INTEGER PRIMARY KEY,
+    doc_id      TEXT NOT NULL REFERENCES document(doc_id),
+    corp_code   TEXT NOT NULL REFERENCES company(corp_code),
+    item_code   TEXT NOT NULL,   -- total_assets · revenue · net_income …
+    value       INTEGER,         -- 원 단위로 환산한 값. 기업 간 비교는 이것으로
+    value_raw   INTEGER NOT NULL,-- 표기된 그대로. 근거를 댈 때 원문과 맞춰야 한다
+    unit_mult   INTEGER,         -- 환산 배수. 1 · 1000 · 1000000
+    unit_label  TEXT,            -- 원 · 천원 · 백만원
+    fiscal_year INTEGER,
+    base_month  INTEGER,         -- 3 · 6 · 9 · 12. 어느 시점·어느 기간까지인가
+                                 -- 회계연도만으로는 같은 해의 1분기와 사업보고서가
+                                 -- 구분되지 않는다. 셀트리온 2025 유동자산이
+                                 -- 3월 5.46조 · 6월 5.25조 · 9월 5.54조 · 12월 6.21조로
+                                 -- 넷 다 (2025, instant)라 조회 시 어느 것이 나올지
+                                 -- 정해지지 않았다
+    period_type TEXT NOT NULL,   -- instant · annual · cumulative · quarter
+    basis       TEXT NOT NULL,   -- 연결 · 별도
+    source      TEXT NOT NULL,   -- xbrl · table. 신뢰도가 다르다
+    item_name   TEXT,            -- 원문 계정 이름. 표 파싱일 때만
+    tag         TEXT,            -- XBRL 태그. 태그 경로일 때만
+    UNIQUE (doc_id, item_code, fiscal_year, base_month, period_type, basis)
+);
+
+-- 조회는 기업·연도·항목으로 들어온다. "삼성전자 2025년 매출액은 얼마인가"
+CREATE INDEX IF NOT EXISTS ix_ff_lookup ON fact_financial(
+    corp_code, item_code, fiscal_year, base_month, basis, period_type);
+CREATE INDEX IF NOT EXISTS ix_ff_doc    ON fact_financial(doc_id);
+CREATE INDEX IF NOT EXISTS ix_ff_item   ON fact_financial(item_code, fiscal_year);
+"""
+
+
+def create_fact_financial_schema(con: sqlite3.Connection) -> None:
+    con.executescript(FACT_FINANCIAL_SCHEMA)
+    con.commit()

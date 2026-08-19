@@ -1,4 +1,7 @@
 > QA
+
+0. 파서의 어려운 부분은 구간 판정, 연결·별도 판정, 종류 판정, 열 판정, 단위 추출
+
 1. think_trace란?
 우리가 주최 측에 돌려주는 JSON 응답 필드 중 하나다. 
 {
@@ -52,7 +55,9 @@ CLOVA Studio에서 하는 것은 프롬프트 설계와 모델 파라미터 조�
 1. manifest 로 기간 유형 문서 좁히기가 무슨 말일까?
 manifest에는 어떤 정보가 있는 걸까?
 
+0번 걸음 점검 항목에 한 줄을 추가하겠다. "규칙을 확정하기 전에 그 규칙이 전제하는 값의 분포를 전수로 센다." 예를 들어 칸 수, 행 수, 표기 종류처럼 규칙이 기대는 성질을 먼저 세는 것이다.
 
+1단계를 진행하되 이 순서를 적용하겠다.
 
 
 
@@ -252,3 +257,44 @@ DART XML에 XBRL 태그(ACODE="ifrs-full_Revenue")가 붙어 있지만 사업보
 출력 직전 마스킹	원문이 보존되어 필요 시 활용 가능. retrieved_context 필드에 그대로 실릴 위험이 남고, 마스킹 누락이 곧 감점
 양쪽 다	누출 위험이 가장 낮음. 작업량이 두 배이고 검색 품질에 미치는 영향을 두 지점에서 각각 확인해야 함
 docs/DATASET.md에는 위 사실의 근거가 되는 실측 수치, 유형별 원문 구조 예시, 재현용 코드가 전부 들어 있습니다. 다음에 데이터를 다룰 때 이 문서만 보면 됩니다.
+
+> 얼마나 남은 거지? 현재 W5 에서 정기공시 재무상태표 + 손익계산서 재무 수치를 담고 있는데, 이렇게 구조화한 DB를 서버에게 옮기기까지 필요한 step이 얼마나 남았을까?
+W6 본문 계층: 이건 정성적 text를 담는?
+W7 검색 및 라우팅
+W8 답변 및 검증
+W9 통합 및 배포
+W10 자체 평가 및 제출물 완성
+
+bs balance sheet 재무상태표
+is income statement 손익계산서
+ci comprehensive income 포괄손익계산서
+eq statement of changes in equity 자본변동표
+cf cashflow statement 현금흐름표
+
+XBRL 태그 하나에도 이렇게 다양한 계정과목명이 붙는다.
+
+total_assets         ifrs:Assets
+                     자산총계 913 · 자산 총계 30 · 자산 합계 4
+
+total_liabilities    ifrs:Liabilities
+                     부채총계 903 · 부채 총계 40 · 부채 합계 4
+
+total_equity         ifrs:Equity
+                     자본총계 887 · 자본 총계 58
+                     제외  (기말자본) · (반기말) 계열 40      자본변동표에서 온 것
+
+revenue              ifrs:Revenue
+                     매출액 520 · 영업수익 171 · 수익(매출액) 99 · 매출 55
+                     매출액 및 기타수익 1
+
+operating_income     dart:OperatingIncomeLoss + ifrs:ProfitLossFromOperatingActivities
+                     영업이익 575 · 영업이익(손실) 332 · 영업손익 23 · 영업손실 16
+
+net_income           ifrs:ProfitLoss
+                     당기순이익(손실) 622 · 당기순이익 515 · 분기순이익 442
+                     반기순이익 173 · 분기순이익(손실) 142 · 반기순이익(손실) 49
+                     당기순손익 32 · 연결분기순이익 29 · 연결당기순이익 27 · …20종
+
+ACODE 무슨 계정인가? 이게 있다면 회사가 그 계정을 뭐라고 부르건 다 통일시켜버릴 수 있다.
+ACONTEXT 언제, 어느 기준인가? 예를 들어 e(어느 시점의 값), d(특정 기간의 값)
+ADECIMAL 단위가 무엇인가? -6 (백만원 단위), -3 (천원 단위), 0 (원 단위)

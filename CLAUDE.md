@@ -63,6 +63,7 @@ OpenDART 등 외부 공시 API를 실시간으로 호출하지 않는다.
 1  docs/PLAN.md 맨 끝 진행 상태 표    어느 W까지 끝났고 다음이 무엇인가
 2  DECISIONS.md 최근 항목             이미 정해져서 다시 논의하지 않을 것
 3  docs/feedback/W*.md 최신 파일       직전 작업에서 무엇이 왜 틀렸나
+4  docs/POLICY.md                     값을 다루는 원칙. 매번 다시 논의하지 않는다
 ```
 
 3번을 건너뛰지 않는다. 같은 실수를 반복하지 않으려고 남긴 기록이다.
@@ -80,6 +81,7 @@ OpenDART 등 외부 공시 API를 실시간으로 호출하지 않는다.
 | 작업별 시행착오, 무엇이 왜 틀렸나 | `docs/feedback/W*.md` |
 | 과제 정의, 데이터 범위와 규칙, 평가지표, 제출물, API 스키마, 일정 | `docs/BRIEF.md` |
 | CLOVA Studio 모델·임베딩·기능 스펙 | `docs/BRIEF.md` |
+| 지금 유효한 데이터 정책 | `docs/POLICY.md` |
 | 과거에 내린 결정과 그 이유 | `DECISIONS.md` |
 | 팀 아이디어, 브레인스토밍 원본 | `MEMO.md` |
 | 대회 과제 원본 | `reference/미래에셋증권 AI Festival 과제 자료_공시 Agent.pdf` |
