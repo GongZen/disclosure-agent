@@ -49,6 +49,7 @@
 |---|---|---|---|
 | `D2_D5.md` | D2 설비투자 · D5 기간 해석 · 시장명 한글 표기 · 그 밖에 물어볼 것 | drydye | 논의 중 |
 | `W7_STATUS.md` | W7 진행 기록 — S2 대상 확정 | drydye | 진행 중 |
+| `EVALSET.md` | 자체 평가지 최종본 — 28문항 질문·답변 | drydye | 공유 |
 
 `W7_STATUS.md` 는 제안이 아니라 진행 기록이라 위 형식표를 따르지 않는다.
 `feedback/README.md` 의 다섯 칸 형식을 쓴다. W7 이 끝나면 `docs/feedback/W7.md`
