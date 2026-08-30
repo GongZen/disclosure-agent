@@ -49,7 +49,8 @@
 |---|---|---|---|
 | `D2_D5.md` | D2 설비투자 · D5 기간 해석 · 시장명 한글 표기 · 그 밖에 물어볼 것 | drydye | 논의 중 |
 | `W7_STATUS.md` | W7 진행 기록 — S2 대상 확정 | drydye | 진행 중 |
-| `IDEA.md` | 정성평가 대응 아이디어 14개 | drydye | 논의 중 |
+| `IDEA.md` | 정성평가 대응 아이디어 15개 | drydye | 논의 중 |
+| `LAYER_STRUCTURE.md` | 검색 레이어 설계 — 목차 코드와 적용 방법 | drydye | 논의 중 |
 | `EVALSET_QUESTION.md` | 자체 평가지 — 질문 28개 | drydye | 공유 |
 | `EVALSET_SOURCE.md` | 자체 평가지 — 근거 공시 출처 | drydye | 공유 |
 | `EVALSET_ANSWER.md` | 자체 평가지 — 답안 (출처 제외 전부) | drydye | 공유 |
