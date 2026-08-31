@@ -16,7 +16,17 @@
 
     --mode=weights   RRF 가중치를 바꿔 가며 잰다
     --mode=stop      질의 해석기의 STOP 갈래를 켜고 끄며 잰다
+    --mode=path      층 2 경로 필터를 켜고 끄며 잰다
     --mode=show      한 설정의 검색 결과를 그대로 낸다. 눈으로 본다
+
+## 다른 질의 세트로 재기
+
+    --cases=queries_set1.csv    set 1 기업 10곳의 질의 30개
+
+평가 스크립트는 이 파일 하나다. 예전에 eval_evalset.py · tune_stop.py ·
+eval_retrieval.py 셋이 더 있었는데 2026-08-30 에 지웠다. 셋 다 retrieval.py 를
+안 쓰고 후보 구성을 따로 해서 같은 질의에 다른 답을 냈다. 꺼내 보려면
+`git show f3af3b6:scripts/eval_evalset.py`. 사유는 docs/feedback/W7.md.
 """
 import csv
 import sys
@@ -52,13 +62,24 @@ GROUPS = {
 }
 
 
-def load_cases():
-    p = ROOT / "data" / "eval" / "body_cases.csv"
+def load_cases(name: str = "body_cases.csv"):
+    """질의 CSV 를 읽는다. 두 형식을 받는다.
+
+        body_cases.csv     no · corp · query · gold
+                           gold 는 정답 절이 여럿이면 | 로 잇는다
+        queries_set1.csv   no · corp · year · subtype · type · level ·
+                           expect_title · query
+
+    정답 컬럼 이름만 다르므로 둘 다 본다. year 는 안 쓴다. 지금 사례가
+    전부 최신 연도이고, 안 넘기면 Corpus 가 기업별 최신 연도를 고른다.
+    """
+    p = ROOT / "data" / "eval" / name
     out = []
     with p.open(encoding="utf-8-sig") as f:
         for r in csv.DictReader(f):
+            gold = r.get("gold") or r.get("expect_title") or ""
             out.append((r["no"], r["corp"], r["query"],
-                        [g for g in r["gold"].split("|") if g]))
+                        [g for g in gold.split("|") if g]))
     return out
 
 
@@ -83,12 +104,13 @@ def run(cp, cases, qvecs, weights, stop=None, topk=8, use_path=False):
     return h1, h3, hk, detail
 
 
-def main(mode: str = "weights", topk: int = 8) -> int:
+def main(mode: str = "weights", topk: int = 8,
+         cases_file: str = "body_cases.csv") -> int:
     import query as Q
     from openai_emb import OpenAIEmbedder, normalize
     from retrieval import Corpus
 
-    cases = load_cases()
+    cases = load_cases(cases_file)
     corps = sorted({c[1] for c in cases})
     cp = Corpus(corps)
     n = len(cases)
@@ -171,10 +193,12 @@ def main(mode: str = "weights", topk: int = 8) -> int:
 
 
 if __name__ == "__main__":
-    m, k = "weights", 8
+    m, k, cf = "weights", 8, "body_cases.csv"
     for a in sys.argv[1:]:
         if a.startswith("--mode="):
             m = a.split("=")[1]
         elif a.startswith("--topk="):
             k = int(a.split("=")[1])
-    sys.exit(main(mode=m, topk=k))
+        elif a.startswith("--cases="):
+            cf = a.split("=")[1]
+    sys.exit(main(mode=m, topk=k, cases_file=cf))

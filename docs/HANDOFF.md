@@ -1,9 +1,15 @@
 # 인수인계
 
-기준일 2026-08-30. 세션이 바뀌어도 여기서부터 이어서 일할 수 있게 쓴 문서다.
+기준일 2026-08-31. 세션이 바뀌어도 여기서부터 이어서 일할 수 있게 쓴 문서다.
 
 이 문서는 지금 상태만 담는다. 왜 그렇게 됐는지는 `docs/feedback/W*.md`,
 무엇을 정했는지는 `DECISIONS.md`, 앞으로 할 일의 전체 지도는 `docs/PLAN.md` 에 있다.
+
+읽기 전에 — 이 문서를 믿기 전에 대조하라. 08-30 판에서 어긋남이 셋 나왔다.
+DB 파일 이름이 틀렸고, 테이블 넷이 표에서 빠졌고, 폐기하기로 한 스크립트
+셋이 저장소에 남아 있는데 그 사실이 안 적혀 있었다. 문서는 쓰는 순간부터
+낡는다. 행 수는 DB 를 직접 세고, 파일이 있다고 적힌 것은 `ls` 로 확인하라.
+어긋나면 실제를 믿고 이 문서를 고쳐라.
 
 ---
 
@@ -21,18 +27,30 @@
 
 ## 1. 데이터가 지금 어떤 상태인가
 
-실측이다. `data/disclosure.db` 를 직접 세었다.
+실측이다. `data/corpus.db` 를 직접 세었다. 5.4GB 다. 경로는
+`src/db.py` 의 `DB_PATH` 가 정한다.
 
-| 테이블 | 행 수 | 무엇인가 |
-|---|---:|---|
-| `document` | 4,204 | 공시 문서 한 건이 한 행 |
-| `doc_relation` | 1,024 | 정정공시가 어느 원본을 고쳤는지 |
-| `event_contract` | 1,169 | 단일판매·공급계약 |
-| `event_major` | 598 | 주요사항보고 |
-| `event_holding` | 1,083 | 대량보유·임원소유 |
-| `fact_financial` | 38,893 | 재무제표 숫자 |
-| `section` | 122,871 | 본문을 목차 단위로 자른 것 |
-| `chunk` | 171,564 | section 을 검색 단위로 다시 자른 것 |
+테이블 12개 전부다. 구조는 `docs/SCHEMA.md` 에 있다.
+
+| 계층 | 테이블 | 행 수 | 무엇인가 |
+|---|---|---:|---|
+| 기준 | `company` | 70 | 대상 기업 |
+| 기준 | `document` | 4,204 | 공시 문서 한 건이 한 행 |
+| 관계 | `doc_relation` | 1,024 | 정정공시가 어느 원본을 고쳤는지 |
+| 이벤트 | `event_contract` | 1,169 | 단일판매·공급계약 |
+| 이벤트 | `event_major` | 598 | 주요사항보고 |
+| 이벤트 | `event_holding` | 1,083 | 대량보유·임원소유 |
+| 원자료 | `contract_item` | 24,558 | 계약 공시의 항목별 원값 |
+| 원자료 | `major_item` | 83,641 | 주요사항 공시의 항목별 원값 |
+| 원자료 | `holding_item` | 1,530,018 | 지분 공시의 항목별 원값. 가장 크다 |
+| 사실 | `fact_financial` | 38,893 | 재무제표 숫자 |
+| 본문 | `section` | 122,871 | 본문을 목차 단위로 자른 것 |
+| 본문 | `chunk` | 171,564 | section 을 검색 단위로 다시 자른 것 |
+
+`*_item` 셋은 공시의 항목을 그대로 담은 것이고, `event_*` 셋은 거기서
+판정에 쓸 값을 추린 것이다. 원자료를 남기는 이유는 판정 기준이 바뀌었을 때
+원문을 다시 안 읽고 다시 추리기 위해서다. `holding_item` 이 153만 행으로
+가장 큰데, W9 에서 무엇을 서버에 올릴지 정할 때 이 크기가 판단에 들어간다.
 
 `chunk` 는 세 컬럼이 다 차 있다.
 
@@ -254,7 +272,14 @@ D5       기간 해석. "최근" 이 몇 년인가
 측정 코드를 여럿 두지 마라
   스크립트 셋이 서로 다른 숫자를 냈다. 설정을 바꿔도 성적이 안 변하는 일까지 겪었다
   지금은 src/retrieval.py 가 실행을, scripts/eval_body.py 가 평가를 맡는다
-  새 평가 스크립트를 만들지 말고 --mode 를 늘려라
+  평가 스크립트는 scripts/eval_body.py 하나뿐이다
+  eval_evalset.py · tune_stop.py · eval_retrieval.py 는 2026-08-31 에 지웠다
+  꺼내려면 git show f3af3b6:scripts/eval_evalset.py
+  새 평가 스크립트를 만들지 말고 --mode 나 --cases 를 늘려라
+
+폐기하기로 정했으면 그 자리에서 지워라
+  위 셋은 통합을 결정하고도 저장소에 남아 있었다
+  결정이 문서에만 있고 저장소에는 없으면 다음 사람은 저장소를 먼저 본다
 
 같은 처리를 두 곳에서 하지 마라
   query.py 가 "보고서" 를 정규식과 STOP 두 곳에서 지우고 있었다
@@ -279,11 +304,14 @@ float32 저장 오차를 결함으로 오해하지 마라
 ## 8. 자주 쓰는 명령
 
 ```bash
-# 검색 성적
+# 검색 성적.  평가 스크립트는 이 하나다
 python scripts/eval_body.py --mode=weights   # RRF 가중치별
 python scripts/eval_body.py --mode=stop      # STOP 갈래별
 python scripts/eval_body.py --mode=path      # 경로 필터 켜고 끄고
 python scripts/eval_body.py --mode=show      # 검색 결과를 눈으로 본다
+
+# 다른 질의 세트로.  기본은 body_cases.csv 37건
+python scripts/eval_body.py --mode=path --cases=queries_set1.csv   # set1 30건
 
 # 관문
 python scripts/verify_section.py
@@ -305,6 +333,7 @@ python scripts/emb_status.py                 # 임베딩 진행률
 data/EVALSET_QUESTION.md      사용자가 만든 평가 질의
 data/EVALSET_SOURCE.md        그 질의의 정답 위치
 data/eval/body_cases.csv      위 둘에서 옮긴 채점용 사례 37건
+data/eval/queries_set1.csv    set 1 기업 10곳의 질의 30개. --cases 로 쓴다
 data/eval/batches.csv         임베딩 7 묶음 배정
 data/golden/                  재무 골든 데이터셋 129건
 data/manual/pdf_facts.csv     PDF 에서 사람이 옮긴 값
