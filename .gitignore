@@ -83,6 +83,11 @@ Desktop.ini
 !data/terms/review_top.csv
 !data/terms/README.md
 data/**/*.db
+# SQLite 가 쓰는 부속 파일. DB 본체와 함께 다니고 따로는 뜻이 없다.
+# WAL 모드로 열면 생긴다. 크기가 작아 눈에 안 띄는데 커밋에 딸려 온다.
+*.db-shm
+*.db-wal
+*.db-journal
 data/.emb_mark
 data/terms/candidates_raw.csv
 data/terms/confusion.csv
