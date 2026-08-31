@@ -70,10 +70,10 @@ ix_company_sector       ON company(sector)
 
 | 컬럼 | 타입 | 내용 |
 |---|---|---|
-| `doc_id` | TEXT PK | `{doc_group}_{rcept_no}` |
+| `doc_id` | TEXT PK | `{doc_group}_{rcept_no}`. 감사보고서는 `audit_{첨부파일명}` |
 | `corp_code` | TEXT NOT NULL FK | `company(corp_code)` 참조 |
 | `corp_name` | TEXT NOT NULL | 조인 없이 쓰기 위한 중복 저장 |
-| `doc_group` | TEXT NOT NULL | periodic 1,054 / exchange 1,469 / holding 1,083 / major 598 |
+| `doc_group` | TEXT NOT NULL | periodic 1,054 / exchange 1,469 / holding 1,083 / major 598 / audit 415 |
 | `doc_subtype` | TEXT | annual · half · quarter · 단일판매공급계약체결 등. major는 전부 NULL |
 | `major_kind` | TEXT | 파생. `report_nm`에서 추출. major 전용 |
 | `category` | TEXT | 파생. D1 확정 후 채움. 현재 전부 NULL |

@@ -89,6 +89,7 @@ data/**/*.db
 *.db-wal
 *.db-journal
 data/.emb_mark
+data/audit_docs.csv
 data/terms/candidates_raw.csv
 data/terms/confusion.csv
 data/terms/term_parts.csv
