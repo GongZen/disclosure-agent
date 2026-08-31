@@ -24,9 +24,12 @@
     --cases=queries_set1.csv    set 1 기업 10곳의 질의 30개
 
 평가 스크립트는 이 파일 하나다. 예전에 eval_evalset.py · tune_stop.py ·
-eval_retrieval.py 셋이 더 있었는데 2026-08-30 에 지웠다. 셋 다 retrieval.py 를
-안 쓰고 후보 구성을 따로 해서 같은 질의에 다른 답을 냈다. 꺼내 보려면
+eval_retrieval.py 셋이 더 있었는데 지웠다. 셋 다 retrieval.py 를 안 쓰고
+후보 구성을 따로 해서 같은 질의에 다른 답을 냈다. 꺼내 보려면
 `git show f3af3b6:scripts/eval_evalset.py`. 사유는 docs/feedback/W7.md.
+
+날짜를 여기 안 적는다. 커밋 해시는 안 바뀌지만 날짜는 두 곳에 적으면
+어긋난다. 실제로 한 번 어긋났다. 시점은 docs/HANDOFF.md 에만 둔다.
 """
 import csv
 import sys
