@@ -15,7 +15,7 @@
 | 사실 | `event_contract` `contract_item` | W4 | 완료 |
 | 사실 | `event_major` `major_item` | W4 | 완료 |
 | 사실 | `event_holding` `holding_item` | W4 | 완료 |
-| 사실 | `fact_financial` | W5 | 미착수 |
+| 사실 | `fact_financial` | W5 | 완료 |
 | 본문 | `section` `chunk` | W6 | 미착수 |
 
 ---
@@ -70,10 +70,10 @@ ix_company_sector       ON company(sector)
 
 | 컬럼 | 타입 | 내용 |
 |---|---|---|
-| `doc_id` | TEXT PK | `{doc_group}_{rcept_no}` |
+| `doc_id` | TEXT PK | `{doc_group}_{rcept_no}`. 감사보고서는 `audit_{첨부파일명}` |
 | `corp_code` | TEXT NOT NULL FK | `company(corp_code)` 참조 |
 | `corp_name` | TEXT NOT NULL | 조인 없이 쓰기 위한 중복 저장 |
-| `doc_group` | TEXT NOT NULL | periodic 1,054 / exchange 1,469 / holding 1,083 / major 598 |
+| `doc_group` | TEXT NOT NULL | periodic 1,054 / exchange 1,469 / holding 1,083 / major 598 / audit 415 |
 | `doc_subtype` | TEXT | annual · half · quarter · 단일판매공급계약체결 등. major는 전부 NULL |
 | `major_kind` | TEXT | 파생. `report_nm`에서 추출. major 전용 |
 | `category` | TEXT | 파생. D1 확정 후 채움. 현재 전부 NULL |
@@ -694,6 +694,105 @@ E·F·G 는 그중 교환사채권·증권예탁증권·기타다. 우리 검산
 
 ---
 
+# 사실 계층 · 재무 — W5 완료
+
+## fact_financial — 38,845행 · 문서 895 · 기업 70
+
+정기공시 재무제표에서 뽑은 값. `item_code` 26종을 담는다.
+
+```
+fact_financial
+    fact_id      PK
+    doc_id       FK   어느 공시에서 나왔나. 근거 제시에 쓴다
+    corp_code    FK
+    item_code         total_assets · revenue · capex …  26종
+    value             원 단위로 환산한 값. 기업 간 비교는 이것으로
+    value_raw         표기된 그대로. 근거를 댈 때 원문과 맞춰야 한다
+    unit_mult         환산 배수. 1 · 1000 · 1000000
+    unit_label        원 · 천원 · 백만원
+    fiscal_year       회계연도
+    base_month        3 · 6 · 9 · 12. 어느 시점·어느 기간까지인가
+    period_type       instant · annual · cumulative · quarter
+    basis             연결 · 별도
+    source            xbrl · table. 신뢰도가 다르다
+    item_name         원문 계정 이름. 표 파싱일 때만
+    tag               XBRL 태그. 태그 경로일 때만
+
+    UNIQUE (doc_id, item_code, fiscal_year, base_month, period_type, basis)
+    IDX  (corp_code, item_code, fiscal_year, base_month, basis, period_type)
+```
+
+## 담은 항목 26종
+
+| 묶음 | item_code |
+|---|---|
+| 재무상태표 총계 | total_assets · total_liabilities · total_equity |
+| 재무상태표 구분 | current_assets · noncurrent_assets · current_liabilities · noncurrent_liabilities |
+| 대분류 예외 | held_for_sale_assets · held_for_sale_liabilities · financial_business_assets · financial_business_liabilities |
+| 손익 | revenue · cost_of_sales · gross_profit · sga · operating_income · pretax_income · net_income |
+| 현금흐름표 | cf_operating · cf_investing · cf_financing · capex |
+| 금융업 | net_interest_income · net_fee_income |
+| 보험 | insurance_result · insurance_revenue |
+
+업종에 따라 수익 항목이 갈린다. D3 결정이다.
+
+```
+제조·서비스   revenue              63개 기업
+은행지주      net_interest_income   5개 기업
+보험          insurance_result      2개 기업
+```
+
+## 값을 뽑는 경로가 둘이다
+
+```
+태그 경로    ACODE 로 항목, ACONTEXT 로 좌표, ADECIMAL 로 단위를 안다
+             판정할 것이 없어 실수도 없다
+
+표 파싱      계정 이름으로 행을 찾고 columns() 로 열을, 제목 표에서 단위를 읽는다
+```
+
+문서가 회계 태그를 갖고 있는지로 고른다. 2023~2024년 문서에도 `ACODE` 가 있으나
+그것은 `CRP_NM`(회사명) `EST_DT`(설립일) 같은 DART 서식 필드 코드다.
+재무제표 본문에 회계 태그가 붙은 것은 562건이다.
+
+태그가 있어도 표 파싱으로 넘기는 경우가 둘 있다.
+
+```
+ACONTEXT 없음   당기인지 전기인지, 누적인지 3개월치인지 모른다
+ADECIMAL 없음   단위를 몰라 원 단위 환산이 안 된다
+```
+
+좌표가 빠지면 태그의 이점이 사라지므로 전부 읽어내는 표 파싱이 낫다.
+
+## 당기 값만 담고 최종 정정본만 담는다
+
+사업보고서는 한 문서에 3개년 열이 있다. 전기 값까지 담으면 2023년 값이
+2024·2025·2026년 사업보고서 셋에 들어간다. 소급재작성 225건(21.4%)에서 그 값이
+갈리고 근거 공시도 정해지지 않는다.
+
+정정본이 여럿일 때는 최종 접수분만 담는다. 정정본 서식이 최초 제출일을 적게
+되어 있어 세 번 정정하면 셋 다 원본을 가리킨다. `doc_relation` 으로는 원본
+하나만 걸러진다.
+
+## 검증
+
+```
+회계 항등식   자산총계 = 부채총계 + 자본총계        1,735건 어긋남 0
+              매출액 − 매출원가 = 매출총이익         2,349건 어긋남 0
+
+참고 지표     매출총이익 − 판관비 = 영업이익          88.08%
+              유동 + 비유동 = 자산총계               99.30%
+              유동 + 비유동 = 부채총계               99.75%
+```
+
+뒤의 셋은 기업의 표시 방식에 따라 어긋날 수 있어 실패로 세지 않는다. 판관비 밖에
+기타영업비용을 따로 적거나, 유동·비유동 밖에 대분류를 더 두는 경우다.
+
+두 경로 대조는 태그 있는 문서 474건에서 2,833쌍 전부 일치했다. 골든 데이터셋은
+사람이 원문을 읽어 채운 22건 132행이고 그중 48건이 대조 대상이다.
+
+---
+
 # 검증
 
 ```bash
@@ -760,11 +859,19 @@ src/build_relation.py     W3 적재
 src/build_contract.py     W4 적재 — event_contract · contract_item
 src/build_major.py        W4 적재 — event_major · major_item
 src/build_holding.py      W4 적재 — event_holding · holding_item
+src/fsdoc.py              재무제표 표 판별 — 구간·연결별도·종류·단위·열
+src/fsvalue.py            재무 항목 값 추출 — 태그 경로와 표 파싱 경로
+src/build_fs.py           W5 적재 — fact_financial
 scripts/verify_base.py    W2 검증
 scripts/verify_relation.py W3 검증
 scripts/verify_contract.py W4 검증 — 계약
 scripts/verify_major.py   W4 검증 — 주요사항
 scripts/verify_holding.py W4 검증 — 지분
+scripts/check_fsdoc.py    W5 표 판별 상태 측정
+scripts/verify_fs.py      W5 골든 데이터셋 대조
+scripts/audit_fs.py       W5 추출 단계 검산
+scripts/verify_fact_fs.py W5 적재 검증
+data/golden/              사람이 원문을 읽어 채운 정답지
 data/corpus.db            생성물 (gitignore)
 ```
 
@@ -781,6 +888,8 @@ python src/build_major.py         # event_major 598 · major_item 83,641
 python scripts/verify_major.py
 python src/build_holding.py       # event_holding 1,083 · holding_item 1,530,018
 python scripts/verify_holding.py
+python src/build_fs.py            # fact_financial 38,845
+python scripts/verify_fact_fs.py
 ```
 
 각 적재 스크립트는 자기 테이블을 지우고 다시 쓴다. 몇 번 돌려도 결과가 같다. 의존 패키지는 `requirements.txt` 에 있고, 대체 수집분 PDF 를 읽는 데 `pypdf` 가 필요하다.

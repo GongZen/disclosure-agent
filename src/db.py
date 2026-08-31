@@ -17,13 +17,23 @@ __all__ = ["DB_PATH", "connect", "create_base_schema"]
 DB_PATH = DATA_DIR / "corpus.db"
 
 
-def connect(path: Path | None = None) -> sqlite3.Connection:
-    """연결을 열고 행을 dict 처럼 다룰 수 있게 설정한다."""
+def connect(path: Path | None = None, timeout: float = 30.0) -> sqlite3.Connection:
+    """연결을 열고 행을 dict 처럼 다룰 수 있게 설정한다.
+
+    WAL 로 두는 이유가 있다. 기본 모드는 한 프로세스가 쓰는 동안 다른 쪽이
+    읽기만 해도 잠긴다. 임베딩처럼 몇 시간 도는 작업 중에 진행 상황을
+    조회하면 그 자리에서 `database is locked` 로 죽는다. WAL 은 읽기와
+    쓰기를 동시에 허용한다.
+
+    timeout 은 그래도 부딪혔을 때 기다리는 시간이다. 곧바로 죽지 않는다.
+    """
     p = path or DB_PATH
     p.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(p)
+    con = sqlite3.connect(p, timeout=timeout)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
+    con.execute("PRAGMA journal_mode = WAL")
+    con.execute("PRAGMA busy_timeout = 30000")
     return con
 
 
@@ -346,4 +356,148 @@ CREATE INDEX IF NOT EXISTS ix_hi_pii  ON holding_item(has_pii);
 
 def create_holding_schema(con: sqlite3.Connection) -> None:
     con.executescript(HOLDING_SCHEMA)
+    con.commit()
+
+
+# ── 사실 계층 · 재무 ────────────────────────────────────────────────
+# 정기공시 재무제표에서 뽑은 값. 항목 8종을 담는다.
+#
+# 당기 값만 담는다. 사업보고서는 한 문서에 3개년 열이 있어 전기 값까지 담으면
+# 같은 연도가 문서 셋에 들어간다. 소급재작성 225건(21.4%)에서 그 값이 갈리고,
+# 답변에 근거 공시를 표시할 때 어느 문서를 댈지도 정해야 한다.
+# 당기만 담으면 (기업, 연도, 항목)이 문서 하나에 대응한다.
+FACT_FINANCIAL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS fact_financial (
+    fact_id     INTEGER PRIMARY KEY,
+    doc_id      TEXT NOT NULL REFERENCES document(doc_id),
+    corp_code   TEXT NOT NULL REFERENCES company(corp_code),
+    item_code   TEXT NOT NULL,   -- total_assets · revenue · net_income …
+    value       INTEGER,         -- 원 단위로 환산한 값. 기업 간 비교는 이것으로
+    value_raw   INTEGER NOT NULL,-- 표기된 그대로. 근거를 댈 때 원문과 맞춰야 한다
+    unit_mult   INTEGER,         -- 환산 배수. 1 · 1000 · 1000000
+    unit_label  TEXT,            -- 원 · 천원 · 백만원
+    fiscal_year INTEGER,
+    base_month  INTEGER,         -- 3 · 6 · 9 · 12. 어느 시점·어느 기간까지인가
+                                 -- 회계연도만으로는 같은 해의 1분기와 사업보고서가
+                                 -- 구분되지 않는다. 셀트리온 2025 유동자산이
+                                 -- 3월 5.46조 · 6월 5.25조 · 9월 5.54조 · 12월 6.21조로
+                                 -- 넷 다 (2025, instant)라 조회 시 어느 것이 나올지
+                                 -- 정해지지 않았다
+    period_type TEXT NOT NULL,   -- instant · annual · cumulative · quarter
+    basis       TEXT NOT NULL,   -- 연결 · 별도
+    source      TEXT NOT NULL,   -- xbrl · table. 신뢰도가 다르다
+    item_name   TEXT,            -- 원문 계정 이름. 표 파싱일 때만
+    tag         TEXT,            -- XBRL 태그. 태그 경로일 때만
+    UNIQUE (doc_id, item_code, fiscal_year, base_month, period_type, basis)
+);
+
+-- 조회는 기업·연도·항목으로 들어온다. "삼성전자 2025년 매출액은 얼마인가"
+CREATE INDEX IF NOT EXISTS ix_ff_lookup ON fact_financial(
+    corp_code, item_code, fiscal_year, base_month, basis, period_type);
+CREATE INDEX IF NOT EXISTS ix_ff_doc    ON fact_financial(doc_id);
+CREATE INDEX IF NOT EXISTS ix_ff_item   ON fact_financial(item_code, fiscal_year);
+"""
+
+
+def create_fact_financial_schema(con: sqlite3.Connection) -> None:
+    con.executescript(FACT_FINANCIAL_SCHEMA)
+    con.commit()
+
+
+# ── 본문 계층 ───────────────────────────────────────────────────────
+# 정기공시를 목차 단위로 자른 것. 서술형 질의는 값으로 답할 수 없고
+# 사업보고서가 평균 72만 자라 통째로 넣을 수 없다.
+#
+# 자르는 경계는 TITLE 태그다. DART 문서가 스스로 그어둔 것이라 우리가
+# 규칙을 만들 필요가 없다. TABLE-GROUP 안의 TITLE 도 경계가 되므로
+# 주석 하나하나가 한 조각이 된다.
+#
+#     <TABLE-GROUP ACLASS="{XBRL}NT_C_D827580">
+#       <TITLE ATOCID="587">16. 우발부채와 약정사항 (연결)</TITLE>
+#
+# ACLASS 는 그 조각이 무엇인지 알려주는 XBRL 코드다. 기업이 뭐라고 부르든
+# 코드가 같으면 같은 주석이다. "특수관계자 거래" 를 여섯 가지 이름으로
+# 부르는데 전부 NT_C_D818000 이다. 연결·별도도 C/S 로 갈려서, 삼성전자처럼
+# 제목에 표시가 없는 문서도 구분된다.
+SECTION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS section (
+    section_id  INTEGER PRIMARY KEY,
+    doc_id      TEXT NOT NULL REFERENCES document(doc_id),
+    corp_code   TEXT NOT NULL REFERENCES company(corp_code),
+    seq         INTEGER NOT NULL,  -- 문서 안 순서. 원문 순서를 보존한다
+    path        TEXT,              -- "III/3/16" 목차 경로
+    level       TEXT,              -- major · minor · group
+    aclass      TEXT,              -- NT_C_D827580 · BS_C … XBRL 코드
+    atocid      TEXT,              -- DART 목차 항목 번호
+    title       TEXT,
+    char_len    INTEGER NOT NULL,  -- 전체 글자 수
+    text_len    INTEGER NOT NULL,  -- 표 밖 문장. 임베딩 대상을 고를 때 쓴다
+    table_len   INTEGER NOT NULL,  -- 표 안
+    n_table     INTEGER NOT NULL,
+    -- 이 조각이 어느 파일에서 왔는가. 사업보고서는 본문 외에 감사보고서와
+    -- 연결감사보고서가 첨부로 붙어 파일이 셋이다(210건). 목차 체계가 서로
+    -- 달라 경로만으로는 구분이 안 된다. 값은 파일 이름이다.
+    src_file    TEXT,
+    text        TEXT,              -- 본문. 표를 포함한 전체
+    UNIQUE (doc_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS ix_sec_doc    ON section(doc_id, path);
+CREATE INDEX IF NOT EXISTS ix_sec_class  ON section(aclass);
+CREATE INDEX IF NOT EXISTS ix_sec_corp   ON section(corp_code, aclass);
+CREATE INDEX IF NOT EXISTS ix_sec_text   ON section(text_len);
+CREATE INDEX IF NOT EXISTS ix_sec_src    ON section(src_file);
+"""
+
+
+def create_section_schema(con: sqlite3.Connection) -> None:
+    con.executescript(SECTION_SCHEMA)
+    con.commit()
+
+
+# 검색용 조각. section 을 임베딩 한도에 맞춰 나눈 것이다.
+#
+# section 은 문서 구조를 보존하는 단위이고 chunk 는 찾기 위한 단위다. 둘을
+# 같게 두면 어느 쪽으로 정해도 한쪽이 나빠진다. 조각을 잘게 쪼개면 맥락이
+# 사라져 검색이 어렵고, 크게 두면 임베딩 벡터가 여러 주제의 평균이 되어
+# 희석된다. 그래서 찾은 뒤에는 section_id 로 원본 절 전체를 꺼낸다.
+# 조각은 찾기 위한 것이지 주기 위한 것이 아니다.
+#
+# 한도를 넘는 section 만 나눈다. 나눌 때 표 경계를 지킨다. 머리글과 숫자가
+# 갈리면 어느 항목의 값인지 알 수 없게 되기 때문이다. 표 하나가 한도를
+# 넘으면 그것은 나누지 않고 잘라서 담는다.
+CHUNK_SCHEMA = """
+CREATE TABLE IF NOT EXISTS chunk (
+    chunk_id   INTEGER PRIMARY KEY,
+    section_id INTEGER NOT NULL REFERENCES section(section_id),
+    doc_id     TEXT NOT NULL REFERENCES document(doc_id),
+    corp_code  TEXT NOT NULL REFERENCES company(corp_code),
+    seq        INTEGER NOT NULL,  -- section 안에서 몇 번째 조각인가
+    header     TEXT,              -- 기업·기간·유형·절. 맥락을 잃지 않게
+    text       TEXT NOT NULL,     -- 헤더를 뺀 본문
+    char_len   INTEGER NOT NULL,
+    token_est  INTEGER NOT NULL,  -- 추정 토큰. 한글 1자 ≈ 0.625토큰
+    n_table    INTEGER NOT NULL,
+    -- 검색에 쓰는 세 벌. 만들기 전에는 비어 있다.
+    --   embedding      CLOVA v2 (bge-m3) 1,024차원
+    --   embedding_oa   OpenAI text-embedding-3-large 3,072차원
+    --   tokens         BM25 용 형태소. 공백으로 이어 붙인 문자열
+    -- 뒤 둘은 한동안 수동 ALTER TABLE 로만 있었고 스키마에 없었다.
+    -- 그래서 테이블을 다시 만들면 사라져 build_tokens 가 멈췄다.
+    -- 코드에 없는 상태를 DB 에만 두지 않는다.
+    embedding    BLOB,
+    embedding_oa BLOB,
+    tokens       TEXT,
+    UNIQUE (section_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS ix_chunk_sec  ON chunk(section_id);
+CREATE INDEX IF NOT EXISTS ix_chunk_doc  ON chunk(doc_id);
+CREATE INDEX IF NOT EXISTS ix_chunk_corp ON chunk(corp_code);
+CREATE INDEX IF NOT EXISTS ix_chunk_emb  ON chunk(embedding IS NULL);
+"""
+
+
+def create_chunk_schema(con: sqlite3.Connection) -> None:
+    con.executescript(CHUNK_SCHEMA)
     con.commit()

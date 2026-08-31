@@ -60,3 +60,38 @@ Desktop.ini
 
 # 로컬 세션 설정. 절대 경로가 들어가므로 공유하지 않는다
 .claude/
+
+
+# ─────────────────────────────────────────────
+# data/ 예외 — 사람이 만든 것은 올린다
+#
+# 원문에서 다시 만들 수 있는 것(DB·임베딩·토큰)은 제외하지만, 사람이 손으로
+# 만든 것은 잃으면 복구가 안 된다. 평가 질의·정답 위치·골든 데이터셋·
+# 수작업 입력이 그렇다.
+#
+# 사전과 경로 매핑은 스크립트로 다시 만들 수 있으나, 만드는 데 시간이 들고
+# 파라미터를 바꾸면 값이 달라진다. 지금 쓰는 값을 기록으로 남긴다.
+# ─────────────────────────────────────────────
+!data/
+!data/**/
+!data/*.md
+!data/eval/**
+!data/golden/**
+!data/manual/**
+!data/samples/**
+!data/terms/dictionary.csv
+!data/terms/review_top.csv
+!data/terms/README.md
+data/**/*.db
+# SQLite 가 쓰는 부속 파일. DB 본체와 함께 다니고 따로는 뜻이 없다.
+# WAL 모드로 열면 생긴다. 크기가 작아 눈에 안 띄는데 커밋에 딸려 온다.
+*.db-shm
+*.db-wal
+*.db-journal
+data/.emb_mark
+data/audit_docs.csv
+data/terms/candidates_raw.csv
+data/terms/confusion.csv
+data/terms/term_parts.csv
+data/terms/dropped.csv
+data/terms/excluded.csv
