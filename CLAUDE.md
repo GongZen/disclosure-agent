@@ -83,6 +83,7 @@ OpenDART 등 외부 공시 API를 실시간으로 호출하지 않는다.
 | Agent가 질의를 어떻게 처리하는가 | `docs/PIPELINE.md` (S1~S11) |
 | 용어의 뜻, 아직 안 정해진 정의 | `docs/GLOSSARY.md` (D1~D7) |
 | 데이터가 실제로 어떻게 생겼는가, 함정과 실측값 | `docs/DATASET.md` |
+| 절을 무엇으로 식별할 것인가, 70개사 목차 구조 실측 | `docs/TOC_SCHEMA.md` |
 | 데이터베이스 테이블 구조와 인덱스 | `docs/SCHEMA.md` |
 | 작업별 시행착오, 무엇이 왜 틀렸나 | `docs/feedback/W*.md` |
 | 과제 정의, 데이터 범위와 규칙, 평가지표, 제출물, API 스키마, 일정 | `docs/BRIEF.md` |
