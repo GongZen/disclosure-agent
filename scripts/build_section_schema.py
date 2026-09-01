@@ -47,6 +47,23 @@ U 코드로 묶으면 서로 무관한 절이 한 단위가 되어 공통 낱말
 5곳 미만인 단위도 행으로 남긴다. 빼 버리면 "왜 없지" 를 나중에 다시 묻게 된다.
 `작업대상` 칸에 `O` 가 붙은 것만 지금 채운다. 나머지는 나중에 보강한다.
 
+## 정정본은 최신 한 건만 쓴다
+
+같은 기업이 2025년 사업보고서를 여러 번 낸다. 정정공시 때문이다.
+
+    전체 85건 · 기업 70곳
+    3건 낸 곳  효성중공업 · 메리츠금융지주 · 고려아연 · KB금융
+    2건 낸 곳  한화오션 · 한전기술 · 크래프톤 · 와이지엔터테인먼트 등 7곳
+
+정정본은 같은 사실을 고쳐 다시 낸 것이라 내용이 거의 같다. 그대로 세면
+그 11개 기업의 표현이 2~3배 가중된다. 그래서 `doc_relation` 이 지목한 원본을
+빼고 기업·연도·종류마다 접수일이 가장 늦은 것만 남긴다.
+
+`src/build_fs.py` 가 재무 값을 담을 때 쓰는 규칙과 같다.
+
+    문서 85건 → 70건 · 기업 70곳 (1:1)
+    대상 절 9,877개 → 8,131개 (17.7% 감소)
+
 ## 감사보고서는 뺀다
 
 감사보고서는 2026-08-31 에 별도 문서(`doc_group='audit'`)로 떼어냈는데
@@ -68,6 +85,21 @@ U 코드로 묶으면 서로 무관한 절이 한 단위가 되어 공통 낱말
 그래서 `char_len >= 300` 으로 빈 절을 먼저 뺀다. `build_pathmap.py` 도 같은
 하한을 쓴다. 다만 상한(30,000)은 두지 않는다. 낱말은 본문 앞 4,000자만 보므로
 큰 절을 배제할 이유가 없고, 배제하면 주석처럼 큰 절을 통째로 잃는다.
+
+## 사람이 읽을 이름을 옆에 붙인다
+
+`NT_C_D818000` 만 보면 무엇인지 알 수 없다. 그래서 `열쇠` 바로 옆에
+`열쇠뜻` 을 둔다. 그 단위에서 가장 많이 쓰인 제목에서 앞 번호만 뗀 것이다.
+
+한 칸에 합치지 않는 이유는 나중에 검색 코드가 `section.aclass` 와 대조할 때
+`열쇠` 를 그대로 써야 하기 때문이다. 문자열을 갈라 쓰면 약해진다.
+
+태그가 여러 제목을 묶은 경우가 많으므로 `다른제목` 에 2~4번째로 흔한 이름을
+함께 싣는다. 무엇이 한 단위로 묶였는지 보여야 판정이 된다.
+
+`이름가짓수` 는 번호를 뗀 뒤의 가짓수다. 원본 제목 그대로 세면 `13. 무형자산`
+과 `15. 무형자산` 이 다른 것으로 세어져 "제목 19가지" 처럼 부풀려진다.
+번호는 기업 사정이지 이름의 차이가 아니다.
 
 ## 정규화 규칙
 
@@ -112,6 +144,16 @@ NUM = re.compile(r"^\s*[\(\[]?\s*[0-9IVXivx]+[\-\.0-9]*\s*[\)\].]?\s*")
 TOP = re.compile(r"^(XII|XI|VIII|VII|VI|IV|IX|V|X|III|II|I)(?:/|$)")
 
 
+def readable(title: str) -> str:
+    """사람이 읽을 이름. 앞 번호만 떼고 띄어쓰기는 살린다.
+
+    번호를 떼는 이유는 기업마다 다르기 때문이다. 어떤 회사는 13번이
+    무형자산이고 어떤 회사는 15번이다. 번호를 남기면 열쇠의 뜻이 아니라
+    한 회사의 사정이 표에 박힌다.
+    """
+    return re.sub(r"\s+", " ", NUM.sub("", title)).strip()
+
+
 def norm(title: str) -> str:
     t = NUM.sub("", title)
     t = re.sub(r"\((제조서비스업|금융업)\)", "", t)
@@ -139,14 +181,37 @@ def schema_key(row) -> tuple[str, str, str] | None:
     return t, norm(row["title"]), "title"
 
 
+def latest_docs(con, year: int, subtype: str) -> set[str]:
+    """정정본을 정리한 문서 집합. build_fs.py 와 같은 규칙이다."""
+    old = {r[0] for r in con.execute(
+        "SELECT DISTINCT to_doc_id FROM doc_relation WHERE to_doc_id IS NOT NULL")}
+    docs = con.execute("""
+        SELECT doc_id, corp_code, base_year, base_month, doc_subtype, rcept_dt
+        FROM document
+        WHERE doc_subtype = ? AND base_year = ? AND doc_group = 'periodic'""",
+        (subtype, year)).fetchall()
+    latest: dict[tuple, object] = {}
+    for d in docs:
+        if d["doc_id"] in old:
+            continue
+        k = (d["corp_code"], d["base_year"], d["base_month"], d["doc_subtype"])
+        cur = latest.get(k)
+        if cur is None or d["rcept_dt"] > cur["rcept_dt"]:
+            latest[k] = d
+    return {d["doc_id"] for d in latest.values()}
+
+
 def main(year: int = 2025, subtype: str = "annual") -> int:
     con = connect()
-    rows = con.execute("""
+    keep_doc = latest_docs(con, year, subtype)
+    q = ",".join("?" * len(keep_doc))
+    rows = con.execute(f"""
         SELECT s.path, s.title, s.aclass, s.char_len, s.text, d.corp_name
         FROM section s JOIN document d ON s.doc_id = d.doc_id
-        WHERE d.doc_subtype = ? AND d.base_year = ? AND d.doc_group = 'periodic'
+        WHERE s.doc_id IN ({q})
           AND s.path <> '' AND s.title <> '' AND s.char_len >= ?""",
-        (subtype, year, MIN_CHARS)).fetchall()
+        list(keep_doc) + [MIN_CHARS]).fetchall()
+    print(f"정정본 정리 후 문서 {len(keep_doc)}건")
     keyed = [(schema_key(r), r) for r in rows]
     skipped = sum(1 for k, _ in keyed if k is None)
     keyed = [(k, r) for k, r in keyed if k]
@@ -162,7 +227,7 @@ def main(year: int = 2025, subtype: str = "annual") -> int:
         kind[u] = kd
         corp[u].add(r["corp_name"])
         paths[u][r["path"]] += 1
-        titles[u][r["title"]] += 1
+        titles[u][readable(r["title"])] += 1
         chars[u] += r["char_len"] or 0
         nsec[u] += 1
 
@@ -200,9 +265,10 @@ def main(year: int = 2025, subtype: str = "annual") -> int:
             "작업대상": "O" if u in target else "",
             "대분류": u[0],
             "열쇠": u[1],
+            "열쇠뜻": titles[u].most_common(1)[0][0],
+            "다른제목": " / ".join(t for t, _n in titles[u].most_common(4)[1:]),
+            "이름가짓수": len(titles[u]),
             "열쇠종류": kind[u],
-            "대표제목": titles[u].most_common(1)[0][0],
-            "제목가짓수": len(titles[u]),
             "기업수": len(corp[u]),
             "절수": c,
             "글자수": chars[u],
