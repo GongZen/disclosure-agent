@@ -135,7 +135,20 @@ class Hit:
 
 
 class Corpus:
-    """검색 대상을 한 번만 읽어 두고 여러 설정으로 재쓴다."""
+    """검색 대상을 한 번만 읽어 두고 여러 설정으로 재쓴다.
+
+    조회 조건의 `c.corp_code IN (...)` 를 지우지 말 것. 없어도 결과는 같지만
+    101배 느려진다. 기업을 가리는 조건이 `d.corp_name` 뿐이면 SQLite 는 어느
+    조각이 그 기업 것인지 미리 알 수 없어 chunk 17만행을 전부 꺼내 document 와
+    이어 붙여 본다. 조각마다 12KB 벡터가 붙어 있어 2GB 를 읽는다.
+
+    chunk 에는 `corp_code` 칸과 그 색인(`ix_chunk_corp`)이 있다. 조건에 이걸
+    넣으면 색인을 타고 그 기업 조각만 집는다. 실측(삼성전자 830조각)이다.
+
+        d.corp_name 만        SCAN c                            101.3초
+        c.corp_code 추가      SEARCH c USING INDEX ix_chunk_corp   1.1초
+                              조각 집합은 완전히 동일
+    """
 
     def __init__(self, corps: list[str], subtype: str = "annual",
                  min_chars: int = 200, latest_only: bool = True):
@@ -149,10 +162,12 @@ class Corpus:
             FROM chunk c
             JOIN section s ON c.section_id = s.section_id
             JOIN document d ON c.doc_id = d.doc_id
-            WHERE c.{COL} IS NOT NULL AND c.tokens IS NOT NULL
+            WHERE c.corp_code IN (SELECT corp_code FROM document
+                                  WHERE corp_name IN ({q}))
+              AND c.{COL} IS NOT NULL AND c.tokens IS NOT NULL
               AND c.char_len >= ? AND d.doc_subtype = ?
               AND d.corp_name IN ({q})""",
-                           [min_chars, subtype] + corps).fetchall()
+                           corps + [min_chars, subtype] + corps).fetchall()
         # 목차·확인서를 뺀다
         rows = [r for r in rows if not SKIP_TITLE.match(r["title"] or "")]
 
