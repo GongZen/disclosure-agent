@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -51,8 +52,20 @@ class Embedder:
     # 떨어졌다. 429 를 맞더라도 밀어붙이는 편이 빠르다. 거부된 요청은
     # 과금되지 않고 재시도가 곧 성공한다. 간격 0 으로 300건을 연속으로
     # 던졌을 때가 분당 88건으로 가장 빨랐다.
+    #
+    # 다만 이 조절만으로는 부족하다. 2026-09-03 에 서버가 응답 머리글로
+    # 알려주는 실제 한도를 확인했다.
+    #
+    #     x-ratelimit-limit-requests   60       분당 60회
+    #     x-ratelimit-limit-tokens     40000    분당 40,000 토큰
+    #     x-ratelimit-reset-tokens     36s      이만큼 뒤에 다시 채워진다
+    #
+    # 묶이는 쪽은 토큰이다. 긴 조각은 한 건에 수천 토큰을 쓰므로 금방
+    # 바닥난다. 바닥난 상태에서는 무엇을 던져도 60초가 지나기 전에는 다
+    # 거부된다. 그래서 간격 조절과 별개로 남은 예산을 보고 기다린다.
+    # 아래 _budget 과 _wait_budget 이 그 일을 한다.
     MIN_GAP = 0.0
-    MAX_GAP = 0.5
+    MAX_GAP = 1.0        # 요청 한도가 분당 60회라 1초보다 촘촘해도 소용없다
 
     def __init__(self, env: dict | None = None, timeout: int = 30):
         self.env = env or load_env()
@@ -62,6 +75,12 @@ class Embedder:
         self.gap = 0.0            # 호출 사이 간격. 스스로 조절한다
         self.ok_streak = 0
         self.n_call = self.n_429 = 0
+        # 서버가 알려준 남은 예산. 아직 한 번도 안 불렀으면 None 이다
+        self.rem_tokens: int | None = None
+        self.rem_reqs: int | None = None
+        self.reset_at = 0.0       # 예산이 다시 채워지는 시각 (monotonic)
+        self.n_wait = 0           # 예산이 없어 미리 기다린 횟수
+        self.t_wait = 0.0         # 그렇게 기다린 시간의 합
         if not self.key or not self.url:
             raise RuntimeError(".env 에 CLOVA_API_KEY 와 CLOVA_EMB_URL 이 필요하다")
 
@@ -77,10 +96,68 @@ class Embedder:
             self.gap = max(self.MIN_GAP, self.gap - 0.05)
             self.ok_streak = 0
 
+    @staticmethod
+    def _secs(v: str) -> float:
+        """'36s' · '1m30s' · '500ms' 같은 값을 초로 바꾼다."""
+        v = (v or "").strip().lower()
+        if not v:
+            return 0.0
+        m = re.fullmatch(r"(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?", v)
+        if m and (m.group(1) or m.group(2)):
+            return int(m.group(1) or 0) * 60 + float(m.group(2) or 0)
+        m = re.fullmatch(r"(\d+(?:\.\d+)?)ms", v)
+        if m:
+            return float(m.group(1)) / 1000
+        try:
+            return float(v)
+        except ValueError:
+            return 0.0
+
+    def _budget(self, headers) -> None:
+        """응답 머리글에서 남은 예산과 리셋 시각을 읽어 둔다."""
+        try:
+            rt = headers.get("x-ratelimit-remaining-tokens")
+            rr = headers.get("x-ratelimit-remaining-requests")
+            rs = (headers.get("x-ratelimit-reset-tokens")
+                  or headers.get("x-ratelimit-reset-requests"))
+            if rt is not None:
+                self.rem_tokens = int(rt)
+            if rr is not None:
+                self.rem_reqs = int(rr)
+            if rs:
+                self.reset_at = time.monotonic() + self._secs(rs)
+        except Exception:      # 머리글 형태가 바뀌어도 호출은 계속돼야 한다
+            pass
+
+    def _wait_budget(self, text: str) -> None:
+        """예산이 모자라면 채워질 때까지 기다린다. 429 를 맞기 전에 피한다.
+
+        토큰 수를 미리 알 수 없으므로 글자 수로 어림잡는다. 한국어는 보통
+        글자 수보다 토큰이 적으므로 이 어림은 넉넉한 쪽이다. 넉넉하게 잡아
+        조금 더 기다리는 편이, 부족하게 잡아 429 를 맞고 재시도를 다섯 번
+        헛되이 쓰는 것보다 낫다.
+        """
+        if self.rem_tokens is None:
+            return
+        need = max(64, len(text))
+        short = self.rem_tokens < need or (self.rem_reqs is not None
+                                           and self.rem_reqs < 1)
+        if not short:
+            return
+        left = self.reset_at - time.monotonic()
+        if left <= 0:
+            self.rem_tokens = self.rem_reqs = None      # 이미 채워졌을 것이다
+            return
+        time.sleep(min(65.0, left + 0.5))
+        self.n_wait += 1
+        self.t_wait += min(65.0, left + 0.5)
+        self.rem_tokens = self.rem_reqs = None          # 다음 응답에서 다시 읽는다
+
     def embed(self, text: str, retry: int = 5) -> tuple[list[float] | None, str]:
         """(벡터, 상태) 를 낸다. 실패하면 벡터가 None 이고 상태에 이유가 담긴다."""
         if self.gap:
             time.sleep(self.gap)
+        self._wait_budget(text)
         body = json.dumps({"text": text}).encode("utf-8")
         last = ""
         for i in range(retry):
@@ -90,6 +167,7 @@ class Embedder:
             try:
                 self.n_call += 1
                 with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                    self._budget(r.headers)
                     d = json.loads(r.read().decode("utf-8"))
                 # 응답 형태가 계정·버전에 따라 다를 수 있어 둘 다 본다
                 vec = (d.get("result", {}) or {}).get("embedding") or d.get("embedding")
@@ -103,9 +181,21 @@ class Embedder:
                 if e.code == 429:
                     self.n_429 += 1
                     self._slow_down()
-                    # 서버가 대기 시간을 알려주면 그것을 따른다
+                    self._budget(e.headers)
+                    # 예산이 다시 채워질 때까지 기다린다. 전에는 Retry-After 를
+                    # 찾다가 없으면 최대 4초만 쉬었는데, CLOVA 는 그 머리글을
+                    # 안 주고 리셋은 최대 60초다. 그래서 다섯 번을 다 헛되이
+                    # 쓰고 조각을 실패로 넘겼다. 2026-09-03 에 분당 3.4건까지
+                    # 떨어진 원인이 이것이다.
                     wait = e.headers.get("Retry-After")
-                    time.sleep(float(wait) if wait else min(4, 0.5 * (i + 1)))
+                    if wait:
+                        rest = self._secs(wait)
+                    else:
+                        rest = self.reset_at - time.monotonic()
+                    if rest <= 0:
+                        rest = min(4, 0.5 * (i + 1))
+                    time.sleep(min(65.0, rest + 0.5))
+                    self.rem_tokens = self.rem_reqs = None
                     continue
                 if e.code >= 500:            # 서버 쪽 일시 오류
                     time.sleep(min(30, 2 ** i))
