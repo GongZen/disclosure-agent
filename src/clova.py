@@ -66,6 +66,7 @@ class Embedder:
     # 아래 _budget 과 _wait_budget 이 그 일을 한다.
     MIN_GAP = 0.0
     MAX_GAP = 1.0        # 요청 한도가 분당 60회라 1초보다 촘촘해도 소용없다
+    TOK_PER_CHAR = 0.75  # 글자당 토큰. 실측 0.66 에 여유를 둔 값. _wait_budget 참조
 
     def __init__(self, env: dict | None = None, timeout: int = 30):
         self.env = env or load_env()
@@ -132,14 +133,18 @@ class Embedder:
     def _wait_budget(self, text: str) -> None:
         """예산이 모자라면 채워질 때까지 기다린다. 429 를 맞기 전에 피한다.
 
-        토큰 수를 미리 알 수 없으므로 글자 수로 어림잡는다. 한국어는 보통
-        글자 수보다 토큰이 적으므로 이 어림은 넉넉한 쪽이다. 넉넉하게 잡아
-        조금 더 기다리는 편이, 부족하게 잡아 429 를 맞고 재시도를 다섯 번
-        헛되이 쓰는 것보다 낫다.
+        토큰 수를 미리 알 수 없으므로 글자 수로 어림잡는다. 비율은 실측했다.
+        2026-09-03 16:29 에 응답 머리글의 잔여 토큰을 12초 간격으로 읽어,
+        호출 10번에 19,738 토큰이 줄어드는 것을 봤다. 한 번에 1,974 토큰이고
+        그때 조각 평균이 2,986자였으므로 글자당 0.66 토큰이다.
+
+        처음에는 글자당 1 토큰으로 잡았는데 실제의 1.5배라 필요 없는 대기가
+        생겼다. 0.75 는 실측 0.66 에 여유를 조금 둔 값이다. 모자라게 잡아
+        429 를 맞더라도 이제는 리셋까지 제대로 기다리므로 손해가 작다.
         """
         if self.rem_tokens is None:
             return
-        need = max(64, len(text))
+        need = max(64, int(len(text) * self.TOK_PER_CHAR))
         short = self.rem_tokens < need or (self.rem_reqs is not None
                                            and self.rem_reqs < 1)
         if not short:
