@@ -354,17 +354,6 @@ def search(cp: Corpus, corp: str, qvec, terms: list[str],
     else:
         order = rrf([list(ov), list(ob)], weights)
 
-    # 층 2-B. 매칭표가 짚은 절의 조각을 앞으로 당긴다. 빼지는 않는다.
-    # 경로 부스트보다 먼저 적용한다. 사람이 만든 쪽을 더 믿기 때문이다.
-    if use_key:
-        want = guess_keys(terms)
-        if want:
-            hit = [i for i in order if chunk_key(cp.byid[cp.ids[i]]) in want]
-            if hit:
-                seen_h = set(hit)
-                rest = [i for i in order if i not in seen_h]
-                order = hit[:KEY_BOOST] + rest + hit[KEY_BOOST:]
-
     # 층 2. 짚은 경로의 조각을 앞으로 당긴다. 빼지는 않는다
     if use_path:
         want = set(guess_paths(terms))
@@ -373,6 +362,24 @@ def search(cp: Corpus, corp: str, qvec, terms: list[str],
             if hit:
                 rest = [i for i in order if i not in set(hit)]
                 order = hit[:PATH_BOOST] + rest + hit[PATH_BOOST:]
+
+    # 층 2-B. 매칭표가 짚은 절의 조각을 앞으로 당긴다. 빼지는 않는다.
+    #
+    # 경로 부스트보다 나중에 한다. 나중에 하는 쪽이 앞자리를 가져간다.
+    # 사람이 만든 표를 자동 생성 지도보다 믿는다.
+    #
+    # 순서를 거꾸로 뒀다가 실제로 당했다. 2026-09-05 안전성 시험에서
+    # 매칭표가 "임원 및 직원 등의 현황" 을 1위로 올렸는데 그 뒤에 돈 경로
+    # 지도가 "임원의 보수 등" 으로 다시 뒤집었다. 두 지도가 서로 다른 절을
+    # 밀어 올리며 싸운 것이다.
+    if use_key:
+        want = guess_keys(terms)
+        if want:
+            hit = [i for i in order if chunk_key(cp.byid[cp.ids[i]]) in want]
+            if hit:
+                seen_h = set(hit)
+                rest = [i for i in order if i not in seen_h]
+                order = hit[:KEY_BOOST] + rest + hit[KEY_BOOST:]
 
     out, seen = [], set()
     for i in order:

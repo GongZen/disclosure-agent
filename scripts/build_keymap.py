@@ -81,6 +81,46 @@ BAD_EXACT = {
 MIN_LEN = 2         # 한 글자 낱말은 안 쓴다
 
 
+# 매칭표에 빠져 있어 손으로 채운 것.
+#
+# 2026-09-05 안전성 시험에서 "등기임원 전원의 이름과 생년월일" 질의가
+# 아무 절도 못 짚었다. 매칭표를 뒤져 보니 임원·등기임원·임직원·이사·
+# 직위·약력이 하나도 없었다. 사람이 표를 만들 때 III 재무 주석에 집중해
+# VIII 임원 쪽이 비었다.
+#
+# 열쇠는 실제 절 이름을 정규화한 값이다. `build_section_schema.py` 의
+# `norm()` 과 같아야 검색이 조각에서 되찾을 수 있다. 확인한 절이다.
+#
+#     VI/1     1. 이사회에 관한 사항        70개사
+#     VIII/1   1. 임원 및 직원 등의 현황     70개사
+#     VIII/2   2. 임원의 보수 등           70개사
+#
+# 표를 직접 고치지 않고 여기서 더한다. 매칭표는 사람이 만드는 것이라
+# 기계가 끼어들면 다음에 사람이 고칠 때 무엇이 자기 것인지 헷갈린다.
+# 여기 두면 출처가 분명하고 되돌리기도 쉽다.
+EXTRA: list[tuple[str, str, str, str, int]] = [
+    # (낱말, 대분류, 열쇠종류, 열쇠, 기업수)
+    ("임원", "VIII", "title", "임원및직원등의현황", 70),
+    ("등기임원", "VIII", "title", "임원및직원등의현황", 70),
+    ("임직원", "VIII", "title", "임원및직원등의현황", 70),
+    ("직원현황", "VIII", "title", "임원및직원등의현황", 70),
+    ("근속연수", "VIII", "title", "임원및직원등의현황", 70),
+    ("출생연월", "VIII", "title", "임원및직원등의현황", 70),
+    ("약력", "VIII", "title", "임원및직원등의현황", 70),
+    ("겸직", "VIII", "title", "임원및직원등의현황", 70),
+    ("임원보수", "VIII", "title", "임원의보수등", 70),
+    ("보수총액", "VIII", "title", "임원의보수등", 70),
+    ("연봉", "VIII", "title", "임원의보수등", 70),
+    ("보수한도", "VIII", "title", "임원의보수등", 70),
+    ("이사회", "VI", "title", "이사회에관한사항", 70),
+    ("사외이사", "VI", "title", "이사회에관한사항", 70),
+    ("이사선임", "VI", "title", "이사회에관한사항", 70),
+    ("최대주주", "VII", "title", "주주에관한사항", 70),
+    ("주주현황", "VII", "title", "주주에관한사항", 70),
+    ("지분율", "VII", "title", "주주에관한사항", 70),
+]
+
+
 def bad(w: str) -> bool:
     """낱말로 못 쓰는 것인가."""
     if len(w) < MIN_LEN or w in BAD_EXACT:
@@ -142,6 +182,14 @@ def main(xlsx: Path) -> int:
 
     print(f"낱말 자리 {n_word:,} · 잡음으로 뺀 것 {n_bad} · 남은 낱말 {len(byword):,}종")
     print(f"낱말이 붙은 행 {n_row} / {len(rows)}")
+
+    n_new = 0
+    for w, top, kt, key, nc in EXTRA:
+        unit = (top, kt, key, key, nc)
+        if unit not in byword[w]:
+            byword[w].append(unit)
+            n_new += 1
+    print(f"손으로 채운 것 {n_new}줄 (임원·이사회·주주. EXTRA 참조)")
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     with OUT.open("w", encoding="utf-8", newline="") as f:
