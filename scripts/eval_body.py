@@ -17,6 +17,7 @@
     --mode=weights   RRF 가중치를 바꿔 가며 잰다
     --mode=stop      질의 해석기의 STOP 갈래를 켜고 끄며 잰다
     --mode=path      층 2 경로 필터를 켜고 끄며 잰다
+    --mode=key       사람이 만든 매칭표를 켜고 끄며 잰다
     --mode=show      한 설정의 검색 결과를 그대로 낸다. 눈으로 본다
 
 ## 다른 질의 세트로 재기
@@ -86,7 +87,13 @@ def load_cases(name: str = "body_cases.csv"):
     return out
 
 
-def run(cp, cases, qvecs, weights, stop=None, topk=8, use_path=False):
+def fmt(ranks) -> str:
+    """적중 순위를 짧게. 없으면 "없음"."""
+    return (str(min(ranks)) + "위") if ranks else "없음"
+
+
+def run(cp, cases, qvecs, weights, stop=None, topk=8, use_path=False,
+        use_key=False):
     """한 설정으로 전부 재고 (1위, 3위내, topk내, 상세) 를 낸다."""
     import query as Q
     from retrieval import grade, search
@@ -98,7 +105,7 @@ def run(cp, cases, qvecs, weights, stop=None, topk=8, use_path=False):
     for (no, corp, q, gold), qv in zip(cases, qvecs):
         p = Q.parse(q)
         hits = search(cp, corp, qv, p.terms, weights=weights, topk=topk,
-                      use_path=use_path)
+                      use_path=use_path, use_key=use_key)
         ranks = grade(hits, gold)
         h1 += 1 in ranks
         h3 += any(r <= 3 for r in ranks)
@@ -181,6 +188,39 @@ def main(mode: str = "weights", topk: int = 8,
             elif ranks and r0 and min(ranks) < min(r0):
                 mark = f"  ← {min(r0)}위→{min(ranks)}위"
             print(f"{no:<12}{str(ranks) if ranks else '없음':<12}{g}{mark}")
+
+    elif mode == "key":
+        from retrieval import guess_keys
+        print(f"\n── 매칭표  (가중치 {W_DEFAULT[0]}:{W_DEFAULT[1]})")
+        print(f"{'설정':<20}{'1위':>7}{'3위내':>7}{f'{topk}위내':>8}")
+        setups = [
+            ("아무것도 없이", False, False),
+            ("경로 지도만", True, False),
+            ("매칭표만", False, True),
+            ("둘 다", True, True),
+        ]
+        keep = {}
+        for name, up, uk in setups:
+            h1, h3, hk, d = run(cp, cases, qvecs, W_DEFAULT, base, topk, up, uk)
+            print(f"{name:<20}{h1:>3}/{n}{h3:>4}/{n}{hk:>5}/{n}")
+            keep[name] = d
+
+        print(f"\n{'문항':<12}{'없이':<10}{'매칭표':<10}변화   짚은 절")
+        n_fire = 0
+        for (no, terms, r0, _), (_, _, r1, _) in zip(
+                keep["아무것도 없이"], keep["매칭표만"]):
+            g = guess_keys(terms)
+            if g:
+                n_fire += 1
+            if r0 == r1:
+                continue
+            a = min(r0) if r0 else 99
+            b = min(r1) if r1 else 99
+            mark = "  좋아짐" if b < a else "  나빠짐"
+            lab = sorted({x[2] for x in g})[:2]
+            print(f"{no:<12}{fmt(r0):<10}{fmt(r1):<10}{mark}   {lab}")
+        print(f"\n매칭표가 발동한 질의  {n_fire}/{n}"
+              f"  ({n_fire / n * 100:.0f}%)")
 
     else:  # show
         Q.parse.__globals__["STOP"] = base

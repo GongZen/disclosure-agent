@@ -124,6 +124,77 @@ def guess_paths(terms: list[str], top: int = 2) -> list[str]:
     return [p for _s, p in hits[:top]]
 
 
+# ── 층 2-B. 사람이 만든 매칭표로 절을 짚는다 ──────────────────────────
+#
+# 위의 경로 지도(`pathmap`)와 하는 일은 같고 열쇠가 다르다.
+#
+#     경로 지도    열쇠가 목차 경로.  III/6 같은 것
+#     매칭표       열쇠가 절의 정체.  제목 또는 XBRL 태그
+#
+# 경로를 안 쓰는 이유는 경로가 회사마다 다른 절을 가리키기 때문이다.
+# 실측에서 `III/6` 에 18가지 절이 들어앉아 있었다. 배당에 관한 사항이
+# 70곳, 범주별 금융상품이 33곳, 매출채권이 21곳이다. 여기에 "결산배당" 을
+# 걸면 어떤 회사에서는 재고자산이 튀어오른다.
+#
+#     경로당 절 수 (평균)
+#        I IV V VI VIII IX X XI   1.0    안정적이다
+#        III                      5.0    최대 25.  쓸 수 없다
+#
+# III 가 절의 대부분인데 하필 거기가 못 믿을 자리다. 그래서 절의 정체를
+# 열쇠로 쓴다. `scripts/build_section_schema.py` 의 schema_key 와 같은
+# 규칙이고, 사전은 `scripts/build_keymap.py` 가 만든다.
+_KEYMAP: dict[str, list[tuple]] | None = None
+# 매칭표가 짚은 절을 이만큼 앞으로 당긴다. 경로 지도보다 크게 준 이유는
+# 사람이 확정한 대응이라 자동 생성물보다 믿을 만하기 때문이다. 다만
+# 빼지는 않는다. 잘못 짚어도 정답을 잃지 않게 한다.
+KEY_BOOST = 30
+NUM_HEAD = re.compile(r"^\s*[\(\[]?\s*[0-9IVXivx]+[\-\.0-9]*\s*[\)\].]?\s*")
+TOP_ROMAN = re.compile(r"^(XII|XI|VIII|VII|VI|IV|IX|V|X|III|II|I)(?:/|$)")
+
+
+def keymap() -> dict[str, list[tuple]]:
+    """낱말 → 그 낱말이 가리키는 절들. (대분류, 열쇠종류, 열쇠) 로 담는다."""
+    global _KEYMAP
+    if _KEYMAP is None:
+        import csv
+        from pathlib import Path
+        p = Path(__file__).resolve().parents[1] / "data" / "eval" / "keymap.csv"
+        _KEYMAP = {}
+        if p.exists():
+            with p.open(encoding="utf-8-sig") as f:
+                for r in csv.DictReader(f):
+                    _KEYMAP.setdefault(r["word"], []).append(
+                        (r["major"], r["key_type"], r["key"]))
+    return _KEYMAP
+
+
+def chunk_key(row) -> tuple[str, str, str] | None:
+    """조각이 속한 절의 정체. 매칭표의 열쇠와 같은 규칙으로 만든다."""
+    m = TOP_ROMAN.match(row["path"] or "")
+    if not m:
+        return None
+    top = m.group(1)
+    ac = row["aclass"]
+    if top == "III" and ac and "_U" not in ac:
+        return top, "tag", ac
+    t = NUM_HEAD.sub("", row["title"] or "")
+    t = re.sub(r"\((제조서비스업|금융업)\)", "", t)
+    t = re.sub(r"\(연결\)", "", t)
+    return top, "title", re.sub(r"\s+", "", t).strip()
+
+
+def guess_keys(terms: list[str]) -> set[tuple[str, str, str]]:
+    """검색어가 가리키는 절들. 매칭표에 없는 말은 그냥 지나간다."""
+    km = keymap()
+    if not km or not terms:
+        return set()
+    out: set[tuple[str, str, str]] = set()
+    for t in terms:
+        for u in km.get(t, ()):
+            out.add(u)
+    return out
+
+
 @dataclass
 class Hit:
     rank: int
@@ -157,8 +228,8 @@ class Corpus:
         q = ",".join("?" * len(corps))
         rows = con.execute(f"""
             SELECT c.chunk_id, c.section_id, c.header, c.text, c.tokens,
-                   c.{COL} v, s.title, s.path, d.corp_name, d.base_year,
-                   d.doc_subtype
+                   c.{COL} v, s.title, s.path, s.aclass, d.corp_name,
+                   d.base_year, d.doc_subtype
             FROM chunk c
             JOIN section s ON c.section_id = s.section_id
             JOIN document d ON c.doc_id = d.doc_id
@@ -218,7 +289,8 @@ def rrf(lists, weights, k: int = 60) -> list[int]:
 
 def search(cp: Corpus, corp: str, qvec, terms: list[str],
            year: int | None = None, weights=(1.0, 1.0),
-           topk: int = 10, use_path: bool = False) -> list[Hit]:
+           topk: int = 10, use_path: bool = False,
+           use_key: bool = False) -> list[Hit]:
     """한 기업 안에서 검색한다. 같은 절은 한 번만 낸다."""
     idx = cp.candidates(corp, year)
     if not len(idx):
@@ -233,6 +305,17 @@ def search(cp: Corpus, corp: str, qvec, terms: list[str],
         order = list(ov)
     else:
         order = rrf([list(ov), list(ob)], weights)
+
+    # 층 2-B. 매칭표가 짚은 절의 조각을 앞으로 당긴다. 빼지는 않는다.
+    # 경로 부스트보다 먼저 적용한다. 사람이 만든 쪽을 더 믿기 때문이다.
+    if use_key:
+        want = guess_keys(terms)
+        if want:
+            hit = [i for i in order if chunk_key(cp.byid[cp.ids[i]]) in want]
+            if hit:
+                seen_h = set(hit)
+                rest = [i for i in order if i not in seen_h]
+                order = hit[:KEY_BOOST] + rest + hit[KEY_BOOST:]
 
     # 층 2. 짚은 경로의 조각을 앞으로 당긴다. 빼지는 않는다
     if use_path:
