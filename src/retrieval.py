@@ -197,12 +197,35 @@ def guess_keys(terms: list[str]) -> set[tuple[str, str, str]]:
 
 @dataclass
 class Hit:
+    """검색이 찾아낸 절 하나.
+
+    출처 넷(`corp`·`report`·`rcept`·`year`)을 함께 들고 다닌다. 절 제목만
+    있으면 생성 모델이 "자료의 첫 번째 부분에 있습니다" 같은 말밖에 못 한다.
+    과제 자료가 "모든 답변에는 근거 공시를 표시할 것" 을 요구하므로 어느
+    보고서인지까지 전달되어야 한다.
+    """
+
     rank: int
     chunk_id: int
     section_id: int
     path: str
     title: str
     text: str
+    corp: str = ""       # 기업 이름
+    report: str = ""     # 보고서명. 예 "사업보고서 (2025.12)"
+    rcept: str = ""      # 접수일 YYYYMMDD
+    year: int = 0        # 회계연도
+
+    def source(self) -> str:
+        """사람이 읽는 출처 한 줄. 답변과 근거 머리글에 그대로 쓴다."""
+        d = f"{self.rcept[:4]}-{self.rcept[4:6]}-{self.rcept[6:8]}" \
+            if len(self.rcept or "") == 8 else ""
+        head = " ".join(x for x in (self.corp, self.report) if x)
+        tail = f"접수 {d}" if d else ""
+        sec = self.title
+        if self.path:
+            sec = f"{self.path} {self.title}"
+        return " · ".join(x for x in (head, sec, tail) if x)
 
 
 class Corpus:
@@ -229,7 +252,7 @@ class Corpus:
         rows = con.execute(f"""
             SELECT c.chunk_id, c.section_id, c.header, c.text, c.tokens,
                    c.{COL} v, s.title, s.path, s.aclass, d.corp_name,
-                   d.base_year, d.doc_subtype
+                   d.base_year, d.doc_subtype, d.report_nm, d.rcept_dt
             FROM chunk c
             JOIN section s ON c.section_id = s.section_id
             JOIN document d ON c.doc_id = d.doc_id
@@ -334,7 +357,11 @@ def search(cp: Corpus, corp: str, qvec, terms: list[str],
         seen.add(r["section_id"])
         out.append(Hit(len(out) + 1, r["chunk_id"], r["section_id"],
                        r["path"] or "", r["title"] or "",
-                       re.sub(r"\s+", " ", r["text"])))
+                       re.sub(r"\s+", " ", r["text"]),
+                       corp=r["corp_name"] or "",
+                       report=r["report_nm"] or "",
+                       rcept=str(r["rcept_dt"] or ""),
+                       year=r["base_year"] or 0))
         if len(out) >= topk:
             break
     return out

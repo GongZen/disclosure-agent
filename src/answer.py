@@ -60,20 +60,39 @@ SYSTEM = """너는 공시 자료만 근거로 답하는 도우미다. 규칙을 
 2. 확인할 수 없으면 "공시에서 확인되지 않음" 이라고 분명히 적는다.
 3. 주가 전망·투자 추천·매수매도 의견을 내지 않는다.
 4. 수치를 말할 때는 근거에 적힌 숫자를 그대로 쓴다. 계산했으면 과정을 밝힌다.
-5. 답변 끝에 근거로 삼은 공시를 적는다.
-6. 되묻지 않는다. 답할 수 있는 만큼 답하고 못 한 부분을 밝힌다.
+5. 되묻지 않는다. 답할 수 있는 만큼 답하고 못 한 부분을 밝힌다.
+
+출처를 반드시 적는다:
+- 각 근거 덩어리는 [근거 N] 또는 [값 N] 으로 시작하고 그 줄에 출처가 적혀 있다.
+  예) [근거 1] 삼성전자 사업보고서 (2025.12) · III/6 6. 배당에 관한 사항 · 접수 2026-03-10
+- 답변 끝에 "근거:" 로 시작하는 줄을 두고, 실제로 쓴 근거의 머리글 줄을
+  글자 하나 바꾸지 말고 그대로 복사해 적는다.
+- 여러 근거를 썼으면 줄을 나눠 모두 적는다.
+- 출처를 지어내지 않는다. 위 머리글에 없는 보고서 이름이나 절 이름을
+  만들어 붙이지 않는다. 특히 목차 번호(III/6 같은 것)를 임의로 쓰지 않는다.
+- "자료의 첫 번째 부분" 처럼 가리키는 말로 대신하지 않는다.
+- [값 N] 을 근거로 썼으면 그 머리글을 그대로 적는다. 거기에 절 이름을
+  덧붙이지 않는다. 표에서 꺼낸 값이라 절이 없다.
 
 답변 형식:
 - 결론을 먼저 한두 문장으로
 - 그 근거를 이어서
 - 답하지 못한 부분이 있으면 왜인지 (범위 밖 · 미공시 · 추출 실패로 구분)
+- 마지막 줄에 근거 출처
 """
 
 
-def build_context(hits, max_ctx: int = MAX_CTX,
-                  max_sec: int = MAX_SEC) -> tuple[str, list[dict]]:
-    """검색 결과를 생성 모델에 넣을 근거로 다듬는다. (본문, 출처목록)."""
+def build_context(hits, max_ctx: int = MAX_CTX, max_sec: int = MAX_SEC,
+                  head: str = "") -> tuple[str, list[dict]]:
+    """검색 결과를 생성 모델에 넣을 근거로 다듬는다. (본문, 출처목록).
+
+    `head` 는 표에서 꺼낸 값이다. 있으면 맨 앞에 두고 그만큼 본문 자리를
+    줄인다. 값이 뒤에 묻히면 모델이 본문의 다른 숫자를 집을 수 있다.
+    """
     parts, used, total = [], [], 0
+    if head:
+        parts.append(head)
+        total += len(head)
     for h in hits[:max_sec]:
         body = (h.text or "").strip()
         room = max_ctx - total
@@ -81,16 +100,22 @@ def build_context(hits, max_ctx: int = MAX_CTX,
             break
         if len(body) > room:
             body = body[:room] + " …(이하 생략)"
-        head = f"[근거 {len(used) + 1}] {h.title}"
+        head = f"[근거 {len(used) + 1}] {h.source()}"
         parts.append(f"{head}\n{body}")
         total += len(body) + len(head)
         used.append({"순위": h.rank, "절": h.title, "경로": h.path,
-                     "글자": len(body)})
+                     "출처": h.source(), "글자": len(body)})
     return "\n\n".join(parts), used
 
 
-def verify(answer: str, context: str) -> list[str]:
-    """답변의 숫자가 근거에 있는지 본다. 없으면 경고를 낸다."""
+def verify(answer: str, context: str, used: list[dict] | None = None) -> list[str]:
+    """답변을 검사한다. 숫자가 근거에 있는지, 출처를 적었는지.
+
+    출처 검사를 넣은 이유는 과제 자료가 "모든 답변에는 근거 공시를 표시할
+    것" 을 요구하기 때문이다. 지시만 주고 확인을 안 하면 모델이 빠뜨려도
+    모른다. 실제로 근거에 절 제목만 넣던 때는 "자료의 첫 번째 부분에서
+    명시되어 있습니다" 로 끝나는 답이 나왔다.
+    """
     import re
     warn = []
     nums = re.findall(r"[\d,]{4,}", answer)
@@ -98,6 +123,29 @@ def verify(answer: str, context: str) -> list[str]:
     for n in set(nums):
         if n.replace(",", "") not in flat:
             warn.append(f"근거에 없는 수치: {n}")
+
+    if used:
+        # 답변이 출처를 하나라도 언급했는가. 보고서명이 들어갔는지로 본다.
+        names = {u.get("출처", "") for u in used}
+        reports = {p.strip() for s in names for p in s.split("·")}
+        hit = any(p and p in answer for p in reports)
+        if not hit:
+            warn.append("답변에 근거 출처가 안 적혔다")
+        # 근거에 없는 보고서를 지어내지 않았는가
+        for m in re.findall(r"(사업|반기|분기)보고서\s*\(([\d.]+)\)", answer):
+            s = f"{m[0]}보고서 ({m[1]})"
+            if not any(s in n for n in names):
+                warn.append(f"근거에 없는 보고서: {s}")
+        # 근거에 없는 절을 지어내지 않았는가.
+        #
+        # 실측에서 모델이 매출액을 물었는데 "III/6 6. 배당 관련 사항" 을
+        # 출처로 적었다. 보고서명은 맞아서 위 검사를 통과했다. 목차 경로가
+        # 근거에 실제로 있었는지 따로 본다.
+        paths = {u.get("경로", "") for u in used}
+        for p in set(re.findall(r"\b((?:XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)"
+                                r"(?:/[0-9-]+)*)\b", answer)):
+            if p not in paths and not any(p in q for q in paths if q):
+                warn.append(f"근거에 없는 절: {p}")
     return warn[:5]
 
 
@@ -152,7 +200,20 @@ def answer(question: str, question_id: str = "", cp: Corpus | None = None,
             "answer": "공시에서 관련 내용을 확인하지 못했다.",
         }
 
-    ctx, used = build_context(hits)
+    # S6 값 조회. 표준 재무 항목을 물었으면 표에서 값을 꺼내 근거 맨 앞에 둔다.
+    #
+    # 본문 검색을 대신하지 않는다. 숫자는 표에서, 맥락은 본문에서 가져가게
+    # 한다. 같은 매출이 본문의 여러 절에 다른 모습으로 나오므로, 어느 값을
+    # 골랐는지 분명히 해 두는 편이 낫다.
+    import facts as F
+    fcs = F.lookup(p.corps[0], F.find_items(question), p.years,
+                   F.find_basis(question))
+    step("S6 값 조회", 찾은_값=[f.line() for f in fcs] or "없음")
+
+    ctx, used = build_context(hits, head=F.as_context(fcs) if fcs else "")
+    for f in fcs:
+        used.insert(0, {"순위": 0, "절": f.item, "경로": "표",
+                        "출처": f.source(), "글자": len(f.line())})
     step("S9 근거 조립", 쓴_절=used, 글자=len(ctx))
 
     chat = chat or Chat()
@@ -169,8 +230,23 @@ def answer(question: str, question_id: str = "", cp: Corpus | None = None,
             "answer": "답변 생성에 실패했다.",
         }
 
-    warn = verify(text, ctx)
-    step("S11 출력 검증", 경고=warn or "없음")
+    # 출처를 안 적었으면 우리가 붙인다.
+    #
+    # 과제 자료가 "모든 답변에는 근거 공시를 표시할 것" 을 요구한다. 생성
+    # 지시로만 두면 답변이 길어졌을 때 상한에 걸려 출처 줄에 닿기 전에
+    # 잘린다. 실측에서 감사위원회 질의가 그랬다.
+    #
+    # 붙이는 내용은 지어낸 것이 아니라 우리가 실제로 넘긴 근거의 머리글이다.
+    warn = verify(text, ctx, used)
+    added = False
+    if "답변에 근거 출처가 안 적혔다" in warn:
+        lines = [u["출처"] for u in used if u.get("출처")]
+        if lines:
+            text = text.rstrip() + "\n\n근거:\n" + "\n".join(
+                f"- {s}" for s in dict.fromkeys(lines))
+            added = True
+            warn = verify(text, ctx, used)
+    step("S11 출력 검증", 경고=warn or "없음", 출처보완=added)
     trace.append({"단계": "완료", "총초": round(time.time() - t0, 1)})
 
     return {"question_id": question_id, "question": question,
