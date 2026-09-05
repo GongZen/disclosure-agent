@@ -175,8 +175,11 @@ def answer(question: str, question_id: str = "", cp: Corpus | None = None,
         }
 
     reused = cp is not None
-    cp = cp or Corpus(p.corps, subtype=p.subtype or "annual")
-    step("S3 후보 구성", 조각=len(cp.rows), 기업=p.corps, 재사용=reused)
+    cp = cp or Corpus(p.corps, subtype=p.subtype or "annual",
+                      doc_groups=p.doc_groups)
+    scope = {"periodic": "정기공시", "audit": "감사보고서"}
+    step("S3 후보 구성", 조각=len(cp.rows), 기업=p.corps, 재사용=reused,
+         검색범위=[scope.get(g, g) for g in getattr(cp, "doc_groups", ("periodic",))])
 
     from openai_emb import OpenAIEmbedder, normalize
     got, st_emb = OpenAIEmbedder().embed_many([question])
@@ -189,8 +192,22 @@ def answer(question: str, question_id: str = "", cp: Corpus | None = None,
         }
     qv = normalize(got[0])
     step("S2 질의 임베딩")
-    hits = search(cp, p.corps[0], qv, p.terms, topk=TOP_K, use_path=True)
+    hits = search(cp, p.corps[0], qv, p.terms, topk=TOP_K, use_path=True,
+                  use_key=True)
     step("S7 본문 검색", 찾은_절=len(hits), 상위=[h.title for h in hits[:4]])
+
+    # 안전장치. 정기공시만 뒤졌는데 아무것도 못 찾았으면 감사보고서까지 넓힌다.
+    #
+    # 감사보고서를 열지 말지는 질의의 낱말로 판정한다. 그 판정이 빗나갈 수
+    # 있다. 못 찾았을 때만 넓히므로 평소 검색은 안 나빠지고, 빗나갔을 때는
+    # 답을 건진다.
+    if not hits and getattr(cp, "doc_groups", ()) == ("periodic",):
+        wide = Corpus(p.corps, subtype=p.subtype or "annual",
+                      doc_groups=("periodic", "audit"))
+        hits = search(wide, p.corps[0], qv, p.terms, topk=TOP_K,
+                      use_path=True, use_key=True)
+        step("S7-B 범위 넓힘", 이유="정기공시에서 못 찾았다",
+             찾은_절=len(hits), 상위=[h.title for h in hits[:3]])
 
     if not hits:
         return {

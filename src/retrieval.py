@@ -245,10 +245,32 @@ class Corpus:
     """
 
     def __init__(self, corps: list[str], subtype: str = "annual",
-                 min_chars: int = 200, latest_only: bool = True):
+                 min_chars: int = 200, latest_only: bool = True,
+                 doc_groups: tuple[str, ...] = ("periodic",)):
+        """`doc_groups` 로 어떤 종류의 문서를 후보에 넣을지 정한다.
+
+        기본은 정기공시만이다. 감사보고서를 넣으면 검색이 나빠진다.
+        2026-09-04 실측에서 질의 30개 중 20개(67%)의 상위 8위 안에 감사보고서
+        조각이 끼어들었고, 빼니 1위 적중이 14/37 에서 17/37 로 올랐다.
+
+        왜 나빠지나. 감사보고서의 78%가 첨부 재무제표와 주석이라 사업보고서
+        III 과 겹친다. 나머지도 "우리는 감사기준에 따라 감사를 수행하였으며"
+        같은 정형 문구라 70개사가 똑같고, 어떤 질의에나 어정쩡하게 걸린다.
+
+        그렇다고 영영 빼는 것은 아니다. 감사보고서에만 있는 내용이 있다.
+        주요 감사실시내용 32조각, 감사인의 중요성 금액 4조각, 감사보고서
+        원문 463조각이다. 그것을 물으면 `query.parse` 가 알아보고 이 인자에
+        'audit' 을 더한다.
+
+        반대로 감사의견·핵심감사사항·감사보수는 사업보고서 `V/1 외부감사에
+        관한 사항` 에 더 많이 있다. 그런 질의는 감사보고서를 안 열어도 된다.
+        실측에서 "외부감사인과 감사보수" 질의가 감사보고서를 빼니 3위에서
+        1위가 됐다.
+        """
         from db import connect
         con = connect()
         q = ",".join("?" * len(corps))
+        g = ",".join("?" * len(doc_groups))
         rows = con.execute(f"""
             SELECT c.chunk_id, c.section_id, c.header, c.text, c.tokens,
                    c.{COL} v, s.title, s.path, s.aclass, d.corp_name,
@@ -260,8 +282,11 @@ class Corpus:
                                   WHERE corp_name IN ({q}))
               AND c.{COL} IS NOT NULL AND c.tokens IS NOT NULL
               AND c.char_len >= ? AND d.doc_subtype = ?
+              AND d.doc_group IN ({g})
               AND d.corp_name IN ({q})""",
-                           corps + [min_chars, subtype] + corps).fetchall()
+                           corps + [min_chars, subtype]
+                           + list(doc_groups) + corps).fetchall()
+        self.doc_groups = tuple(doc_groups)
         # 목차·확인서를 뺀다
         rows = [r for r in rows if not SKIP_TITLE.match(r["title"] or "")]
 
