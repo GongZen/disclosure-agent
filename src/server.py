@@ -132,14 +132,21 @@ def get_chat() -> Chat:
     return _chat
 
 
-def get_corpus(corps: list[str], subtype: str) -> Corpus:
-    """기업별로 한 번만 만들어 재사용한다. 오래된 것부터 버린다."""
-    key = (tuple(sorted(corps)), subtype)
+def get_corpus(corps: list[str], subtype: str,
+               doc_groups: tuple[str, ...] = ("periodic",)) -> Corpus:
+    """기업별로 한 번만 만들어 재사용한다. 오래된 것부터 버린다.
+
+    열쇠에 `doc_groups` 를 넣는 것이 중요하다. 감사보고서를 연 질의와 안
+    연 질의는 후보가 다르다. 열쇠에서 빼면 앞선 질의가 만들어 둔 것을
+    뒤 질의가 그대로 써서 검색 범위가 뒤섞인다.
+    """
+    key = (tuple(sorted(corps)), subtype, tuple(doc_groups))
     with _lock:
         if key in _corpus:
             _corpus.move_to_end(key)
             return _corpus[key]
-    cp = Corpus(list(corps), subtype=subtype)      # 락 밖에서 만든다. 오래 걸린다
+    # 락 밖에서 만든다. 오래 걸린다
+    cp = Corpus(list(corps), subtype=subtype, doc_groups=tuple(doc_groups))
     with _lock:
         _corpus[key] = cp
         _corpus.move_to_end(key)
@@ -197,7 +204,8 @@ def get_answer(
     t0 = time.time()
     try:
         p = Q.parse(question)
-        cp = get_corpus(p.corps, p.subtype or "annual") if p.corps else None
+        cp = (get_corpus(p.corps, p.subtype or "annual", p.doc_groups)
+              if p.corps else None)
         r = run_answer(question, question_id, cp=cp, chat=get_chat())
         _stat["성공"] += 1
     except Exception as e:                          # 어떤 오류든 4필드는 채워 보낸다
