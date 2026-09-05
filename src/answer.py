@@ -92,6 +92,8 @@ SYSTEM = """너는 공시 자료만 근거로 답하는 도우미다. 규칙을 
 - "자료의 첫 번째 부분" 처럼 가리키는 말로 대신하지 않는다.
 - [값 N] 을 근거로 썼으면 그 머리글을 그대로 적는다. 거기에 절 이름을
   덧붙이지 않는다. 표에서 꺼낸 값이라 절이 없다.
+- 근거에 [값 N] 이 하나도 없으면 답변에도 [값 N] 을 쓰지 않는다.
+  [근거 N] 만 있는데 [값 N] 이라고 적으면 없는 출처를 만든 것이 된다.
 
 답변 형식:
 - 결론을 먼저 한두 문장으로
@@ -195,6 +197,18 @@ def verify(answer: str, context: str, used: list[dict] | None = None) -> list[st
                                 r"(?:/[0-9-]+)*)\b", answer)):
             if p not in paths and not any(p in q for q in paths if q):
                 warn.append(f"근거에 없는 절: {p}")
+        # 값 조회를 안 했는데 답변이 [값 N] 을 근거로 들지 않았는가.
+        #
+        # 실측에서 이사회 질의에 모델이 "[값 1] … VI/1 1. 이사회에 관한
+        # 사항" 을 적었다. 그 질의는 표준 재무 항목이 없어 값 조회가 아예
+        # 안 돌았다. 위 검사들은 절 경로가 맞아서 통과시켰다.
+        n_fact = sum(1 for u in used if u.get("경로") == "표")
+        cited = re.findall(r"\[값\s*(\d+)\]", answer)
+        if cited and n_fact == 0:
+            warn.append("값 조회를 안 했는데 답변이 [값 N] 을 든다")
+        elif cited and max(int(x) for x in cited) > n_fact:
+            warn.append(f"없는 값 번호를 든다: 값 {max(int(x) for x in cited)}"
+                        f" (실제 {n_fact}개)")
     return warn[:5]
 
 
