@@ -57,6 +57,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 import query as Q
 from answer import answer as run_answer
@@ -66,8 +67,57 @@ from retrieval import Corpus
 MAX_CORP = 8        # 메모리에 동시에 둘 기업 수
 WARM: list[str] = []  # 기동할 때 미리 올릴 기업. 비워 두면 안 올린다
 
-app = FastAPI(title="공시 Agent", version="0.1",
-              description="공시를 근거로 질의에 답한다. GET /answer 하나뿐이다.")
+API_INTRO = """공시 문서만을 근거로 질의에 답한다.
+
+평가 창구는 `GET /answer` 하나다. `question` 과 `question_id` 를 주면 네 필드
+JSON 을 돌려준다.
+
+기계가 읽는 명세는 `/openapi.json` 에, 사람이 보는 문서는 `/docs` 에 있다.
+둘 다 이 코드에서 자동으로 만들어진다.
+
+## 답을 못 하는 경우에도 네 필드를 채워 보낸다
+
+대상 기업을 못 찾거나, 근거를 못 찾거나, 생성이 실패하거나, 처리 중 오류가
+나도 HTTP 200 과 네 필드를 보낸다. `answer` 에 왜 못 했는지 적고
+`think_trace` 마지막 항목에 중단 사유를 남긴다.
+
+평가 중 한 질의가 실패해도 나머지가 이어지도록 하기 위해서다. 오류를 HTTP
+상태로 알리면 평가 도구가 그 자리에서 멈출 수 있다.
+"""
+
+
+class AnswerResponse(BaseModel):
+    """`GET /answer` 의 응답. 과제 자료의 스키마를 그대로 따른다."""
+
+    question_id: str = Field(
+        description="받은 질의 식별자를 그대로 돌려준다. 안 주면 빈 문자열",
+        examples=["Q-001"])
+    question: str = Field(
+        description="받은 질의 원문",
+        examples=["삼성전자의 주주환원 정책이 어떻게 되는지 알려줘"])
+    retrieved_context: str = Field(
+        description="답변 생성에 실제로 넣은 공시 원문. 절 단위로 모으고"
+                    " 6,000자에서 자른다. 절마다 앞에 [근거 N] 과 절 이름이 붙는다",
+        examples=["[근거 1] 6. 배당에 관한 사항 — 가. 배당에 대한 전반적인 사항 …"])
+    think_trace: str = Field(
+        description="어떤 단계를 밟아 그 답에 이르렀는지. 단계마다 걸린 시간과"
+                    " 무엇을 골랐는지가 들어간다. 실제로는 줄바꿈으로 구분된다."
+                    " trace=json 을 주면 문자열 대신 단계별 구조로 받는다",
+        examples=["S1 질의 해석 :: {초 0.0, 기업 [삼성전자], 검색어 [주주, 환원, 정책]} | S3 후보 구성 :: {초 0.0, 조각 823} | S7 본문 검색 :: {초 0.2, 상위 [6. 배당에 관한 사항]} | S10 답변 생성 :: {초 7.8, 상태 ok} | S11 출력 검증 :: {초 0.0, 경고 없음}"])
+    answer: str = Field(
+        description="최종 답변. 근거에 없는 내용은 넣지 않고, 확인할 수 없으면"
+                    " 확인되지 않음이라고 적는다. 끝에 근거로 삼은 공시를 밝힌다",
+        examples=["삼성전자는 … (근거: 사업보고서 2025.12 — III. 재무에 관한 사항 6. 배당에 관한 사항)"])
+
+
+class HealthResponse(BaseModel):
+    """`GET /health` 의 응답. 살아 있는지 보는 용도다."""
+
+    ok: bool = Field(description="서버가 응답 가능한 상태인가", examples=[True])
+
+
+app = FastAPI(title="공시 Agent", version="1.0",
+              description=API_INTRO)
 
 _lock = threading.Lock()
 _corpus: OrderedDict[tuple, Corpus] = OrderedDict()
@@ -118,17 +168,30 @@ def warm() -> None:
         print(f"   {c} 적재 {time.time() - t0:.1f}초", flush=True)
 
 
-@app.get("/health")
+@app.get("/health", response_model=HealthResponse,
+         summary="살아 있는지 확인",
+         description="서버가 응답 가능한 상태인지 본다. 자동 재시작 감시가"
+                     " 이 창구를 쓴다. 처리 통계도 함께 낸다.")
 def health() -> dict:
-    """살아 있는지 보는 창구. 자동 재시작 감시에도 쓴다."""
     return {"ok": True, "적재된 기업": len(_corpus), **_stat}
 
 
-@app.get("/answer")
+@app.get("/answer", response_model=AnswerResponse,
+         summary="공시를 근거로 질의에 답한다",
+         description="평가 창구다. 질의 하나를 받아 네 필드 JSON 을 돌려준다."
+                     " 답을 못 하는 경우에도 HTTP 200 과 네 필드를 보낸다.")
 def get_answer(
-    question: str = Query(..., description="평가 질의"),
-    question_id: str = Query("", description="질의 식별자"),
-    trace: str = Query("text", description="think_trace 형식. text 또는 json"),
+    question: str = Query(
+        ..., description="평가 질의. 한국어 문장",
+        examples=["삼성전자의 주주환원 정책이 어떻게 되는지 알려줘"]),
+    question_id: str = Query(
+        "", description="질의 식별자. 받은 값을 응답에 그대로 돌려준다",
+        examples=["Q-001"]),
+    trace: str = Query(
+        "text", description="think_trace 를 어떤 형식으로 받을지."
+                            " text 는 사람이 읽는 한 덩어리 글,"
+                            " json 은 단계별 구조. 평가에는 text 를 쓴다",
+        pattern="^(text|json)$"),
 ) -> JSONResponse:
     _stat["요청"] += 1
     t0 = time.time()
