@@ -82,11 +82,16 @@ Python 3.12 기준.
 pip install -r requirements.txt
 ```
 
-CLOVA Studio API 키는 환경변수로 둔다. 코드에 직접 쓰지 않는다.
+열쇠는 저장소 뿌리의 `.env` 에 둔다. 코드에 직접 쓰지 않는다. `env.example`
+을 복사해 값을 채운다.
 
-```powershell
-[Environment]::SetEnvironmentVariable("CLOVA_API_KEY", "발급받은키", "Machine")
+```bash
+cp env.example .env
 ```
+
+무엇이 필요한지는 `env.example` 에 적혀 있다. 환경변수로 지정하면 `.env`
+보다 그쪽을 먼저 본다. `.env` 는 `.gitignore` 가 막고 있어 저장소에
+올라가지 않는다.
 
 ---
 
@@ -94,18 +99,33 @@ CLOVA Studio API 키는 환경변수로 둔다. 코드에 직접 쓰지 않는�
 
 네이버 클라우드 플랫폼(NCP)에서 운영한다.
 
-| 항목 | 값 |
-|---|---|
-| OS | Windows Server 2022 |
-| 스펙 | s2-g3a (vCPU 2, Memory 8GB), 스토리지 30GB |
-| 포트 | 80 (HTTP) |
-| 자동 재시작 | 작업 스케줄러 `DisclosureAgentAPI` |
+| 항목 | 값 | 상태 |
+|---|---|---|
+| OS | Windows Server 2022 | 개설 완료 |
+| 스펙 | s2-g3a (vCPU 2, Memory 8GB), 스토리지 30GB | 개설 완료 |
+| 공인 IP | 211.188.57.111 | 접속 확인 |
+| 포트 | 배포 시 확정 | 미정 |
+| 자동 재시작 | 작업 스케줄러 | 미착수 |
+
+서버는 만들어 두었고 접속이 되는 것까지 확인했다. 코드와 데이터를 올리는
+일과 자동 재시작 설정은 아직 하지 않았다.
 
 ### 실행
 
-```powershell
-cd C:\app
-python -m uvicorn main:app --host 0.0.0.0 --port 80
+로컬에서 띄울 때다. 저장소 뿌리에서 실행한다.
+
+```bash
+python -m uvicorn src.server:app --host 0.0.0.0 --port 8000
+```
+
+`--host 0.0.0.0` 이 있어야 바깥에서 들어올 수 있다. 빼면 그 컴퓨터 안에서만
+열린다. `data/corpus.db` 가 있어야 하고, 없으면 `docs/SCHEMA.md` 의 파일
+구성을 보고 만든다.
+
+살아 있는지 보려면 이렇게 한다.
+
+```bash
+curl "http://127.0.0.1:8000/health"
 ```
 
 ### 엔드포인트
