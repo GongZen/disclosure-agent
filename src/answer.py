@@ -55,6 +55,7 @@ TOP_K = 8           # 검색 상위 몇 개를 근거 후보로 볼 것인가
 MAX_SEC = 4         # 그중 실제로 넣을 절의 수
 MAX_CORPS = 6       # 한 질의에서 훑을 기업 수의 상한
 MAX_FACTS = 8       # 표에서 꺼낼 값의 수 상한
+MAX_EVENTS = 6      # 표에서 꺼낼 수시·지분 공시의 수 상한
 
 SYSTEM = """너는 공시 자료만 근거로 답하는 도우미다. 규칙을 반드시 지킨다.
 
@@ -436,12 +437,40 @@ def answer(question: str, question_id: str = "", cp: Corpus | None = None,
                             limit=max(1, MAX_FACTS // n_corp)))
     step("S6 값 조회", 찾은_값=[f.line() for f in fcs] or "없음")
 
+    # S6-B 공시 조회. 수시·거래소·지분 공시는 본문 검색이 못 본다.
+    #
+    # 그 세 종류는 본문 조각으로 안 쪼개져 있다. 문서 4,619건 중 3,150건이다.
+    # 대신 정형 표로 뽑아 두었으므로 여기서 직접 조회한다. 계약금액·투자금액·
+    # 지분율은 표에 숫자 그대로 있다.
+    #
+    # 2026-09-06 자체 평가지 실측에서 틀린 11건 중 9건이 이것 때문이었다.
+    # 앱이 사업보고서의 `XI/1 공시내용 진행 및 변경사항` 을 근거로 삼아
+    # "그 보고서를 참조하라" 로 끝내고 있었다.
+    import events as V
+    kinds = V.find_kinds(question)
+    evs = []
+    if kinds:
+        dates = V.find_dates(question)
+        for c in p.corps:
+            if len(evs) >= MAX_EVENTS:
+                break
+            evs.extend(V.lookup(c, kinds, p.years or V.find_years(question),
+                                limit=max(2, MAX_EVENTS // n_corp), dates=dates))
+        step("S6-B 공시 조회", 종류=[f"{t}:{k}" for t, k in kinds],
+             찾은_공시=[f"{e.report} {e.rcept}" for e in evs] or "없음")
+
+    # 표에서 꺼낸 것을 근거 맨 앞에 둔다. 값이 먼저, 공시가 다음, 본문이 끝이다.
+    head = "\n\n".join(x for x in (F.as_context(fcs) if fcs else "",
+                                   V.as_context(evs) if evs else "") if x)
     # 기업이 여럿이면 절마다 쓸 자리를 나눈다. 안 나누면 앞 기업이 다 먹는다.
-    room = MAX_CTX - (len(F.as_context(fcs)) if fcs else 0)
+    room = MAX_CTX - len(head)
     ctx, used = build_context(
-        hits, head=F.as_context(fcs) if fcs else "",
+        hits, head=head,
         max_sec=len(hits) if n_corp > 1 else MAX_SEC,
         per_cap=max(400, room // max(1, len(hits))) if n_corp > 1 else None)
+    for e in reversed(evs):
+        used.insert(0, {"순위": 0, "절": e.kind, "경로": "공시",
+                        "출처": e.source(), "글자": len(e.line())})
     for f in fcs:
         used.insert(0, {"순위": 0, "절": f.item, "경로": "표",
                         "출처": f.source(), "글자": len(f.line())})
