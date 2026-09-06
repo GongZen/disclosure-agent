@@ -21,15 +21,31 @@
 ## 폴더 구조
 
 ```
-├── CLAUDE.md          프로젝트 규칙 · 문서 라우팅
-├── DECISIONS.md       결정 로그 (추가만, 수정·삭제 금지)
-├── MEMO.md            아이디어 · 브레인스토밍 원본
+├── README.md          이 문서. 환경 구성 · 실행 명령어
+├── Dockerfile         컨테이너 실행 환경
+├── requirements.txt   파이썬 꾸러미
+├── env.example        열쇠 서식
+├── src/               구현체
+│   ├── server.py      평가용 API 서버 (FastAPI)
+│   ├── answer.py      질의 → 검색 → 생성 → 검증 조립부
+│   ├── retrieval.py   낱말 검색 · 의미 검색 · 매칭표
+│   ├── query.py       질의 해석 (기업 · 연도 · 업종 · 검색어)
+│   ├── facts.py       재무제표 표에서 값 직접 조회
+│   └── build_*.py     원문 → 데이터베이스 적재
+├── scripts/           평가 · 점검 스크립트
 ├── docs/
-│   ├── BRIEF.md       과제 요강 · 평가지표 · 제출물 · CLOVA Studio 스펙
+│   ├── API.md         평가용 API 명세서 — 요청 · 응답 스키마
+│   ├── PROPOSAL.md    기술 제안서
+│   ├── PIPELINE.md    질의 처리 단계 S1~S11
+│   ├── SCHEMA.md      데이터베이스 구조 · 재구축 절차
+│   ├── BRIEF.md       과제 요강 · 평가지표 · 제출물
 │   └── DATASET.md     코퍼스 분석 보고서 (실측)
+├── data/eval/         평가 질의 · 매칭표 · 절 스키마
+├── DECISIONS.md       결정 로그 (추가만, 수정·삭제 금지)
+├── CLAUDE.md          프로젝트 규칙 · 문서 라우팅
 ├── reference/         대회 배포 원본 자료
 ├── assets/            공시 원문 코퍼스 — 저장소에 없음. 아래 참조
-└── data/              생성 산출물 — 저장소에 없음
+└── data/corpus.db     빌드 산출물 5.6GB — 저장소에 없음
 ```
 
 ---
@@ -97,42 +113,84 @@ cp env.example .env
 
 ## 평가용 API 서버
 
-네이버 클라우드 플랫폼(NCP)에서 운영한다.
+네이버 클라우드 플랫폼(NCP)에서 운영한다. 요청·응답 스키마와 사용법은
+`docs/API.md` 에 있다.
 
-| 항목 | 값 | 상태 |
+```
+End-point   http://211.188.57.111:8000
+평가 창구    GET /answer?question_id={id}&question={평가 질의}
+운영 기간    2026.09.07 ~ 09.20 상시
+인증        없음
+```
+
+| 항목 | 값 |
+|---|---|
+| OS | Windows Server 2022 |
+| 스펙 | s2-g3a (vCPU 2, Memory 8GB), 스토리지 30GB |
+| 공인 IP · 포트 | 211.188.57.111 : 8000 |
+| 방화벽 | Windows 인바운드 8000/TCP 허용 · NCP ACG 인바운드 8000 · 아웃바운드 443 |
+| 자동 재시작 | Windows 작업 스케줄러 `DisclosureAgentAPI` · 부팅 시 자동 실행 |
+
+무인 재부팅으로 서버가 스스로 올라오는 것을 확인했다. 로그인 없이 외부에서
+`/health` 가 응답한다.
+
+기동할 때 형태소 분석기와 기업 마스터를 미리 올린다. 그래서 뜨는 데 10초
+남짓 걸리고, 대신 첫 질의부터 정상 속도가 나온다.
+
+### 응답 시간
+
+2026-09-06 실측. 노트북에서 서버로 외부 호출한 값이다.
+
+| 질의 성격 | 예시 | 걸린 시간 |
 |---|---|---|
-| OS | Windows Server 2022 | 개설 완료 |
-| 스펙 | s2-g3a (vCPU 2, Memory 8GB), 스토리지 30GB | 개설 완료 |
-| 공인 IP | 211.188.57.111 | 접속 확인 |
-| 포트 | 배포 시 확정 | 미정 |
-| 자동 재시작 | 작업 스케줄러 | 미착수 |
+| 정형 숫자 | 삼성전자의 2024년 연결 기준 매출액은 얼마인가 | 2.7초 |
+| 정성 서술 | SK하이닉스의 배당 정책을 알려줘 | 9.9초 |
+| 살아 있는지 | `/health` | 0.12초 |
 
-서버는 만들어 두었고 접속이 되는 것까지 확인했다. 코드와 데이터를 올리는
-일과 자동 재시작 설정은 아직 하지 않았다.
+대부분이 HyperCLOVA X 가 답을 만드는 시간이다. 검색은 0.2초 안에 끝난다.
+호출 측 시간 제한은 120초를 권한다.
 
-### 실행
+### 직접 띄우기
 
-로컬에서 띄울 때다. 저장소 뿌리에서 실행한다.
+저장소 뿌리에서 실행한다. `.env` 와 `data/corpus.db` 가 있어야 한다.
 
 ```bash
+pip install -r requirements.txt
+cp env.example .env          # 값을 채운다
 python -m uvicorn src.server:app --host 0.0.0.0 --port 8000
 ```
 
 `--host 0.0.0.0` 이 있어야 바깥에서 들어올 수 있다. 빼면 그 컴퓨터 안에서만
-열린다. `data/corpus.db` 가 있어야 하고, 없으면 `docs/SCHEMA.md` 의 파일
-구성을 보고 만든다.
+열린다. `data/corpus.db` 를 원문에서 새로 만드는 방법은 `docs/SCHEMA.md`
+파일 구성에 있다.
 
-살아 있는지 보려면 이렇게 한다.
+컨테이너로 띄우려면 `Dockerfile` 을 쓴다.
+
+```bash
+docker build -t disclosure-agent .
+docker run --rm -p 8000:8000 --env-file .env            -v "$PWD/data:/app/data" -v "$PWD/assets:/app/assets"            disclosure-agent
+```
+
+`data/` 와 `assets/` 는 이미지에 넣지 않고 붙인다. 합쳐 11GB 라 이미지에
+넣으면 다루기 어렵다.
+
+### 확인
 
 ```bash
 curl "http://127.0.0.1:8000/health"
+curl -G "http://127.0.0.1:8000/answer"      --data-urlencode "question_id=Q-001"      --data-urlencode "question=삼성전자의 주주환원 정책이 어떻게 되는지 알려줘"
 ```
 
 ### 엔드포인트
 
 ```
-GET /answer?question_id={id}&question={질의}
+GET /answer     평가 창구. question · question_id · trace
+GET /health     살아 있는지
+GET /docs       사람이 보는 명세 화면. 여기서 바로 질의를 던져 볼 수 있다
+GET /openapi.json   기계가 읽는 명세 원본
 ```
+
+응답은 과제가 요구하는 네 필드다.
 
 ```json
 {
@@ -144,19 +202,20 @@ GET /answer?question_id={id}&question={질의}
 }
 ```
 
-자동 생성 문서는 `/docs`, API 명세서는 `/openapi.json`에서 확인한다.
+답을 못 하는 경우에도 HTTP 200 과 네 필드를 보낸다. 평가 중 한 질의가
+실패해도 나머지가 이어지도록 하기 위해서다.
 
----
+자세한 요청·응답 스키마와 `think_trace` 의 단계별 설명은 `docs/API.md` 에 있다.
 
 ## 진행 상태
 
 | 단계 | 상태 |
 |---|---|
 | 데이터 실사 | 완료 — `docs/DATASET.md` |
-| 서버 구축 · 파이프라인 관통 | 완료 |
-| 자동 재시작 검증 | 완료 |
-| 데이터 구조화 | 진행 예정 |
-| 검색 · 답변 파이프라인 | 미착수 |
+| 데이터 구조화 · 데이터베이스 적재 | 완료 — 조각 171,564개 |
+| 검색 파이프라인 | 완료 — 낱말 · 의미 · 매칭표 세 갈래 |
+| 답변 생성 · 출처 표기 · 출력 검증 | 완료 |
+| 서버 구축 · 자동 재시작 검증 | 완료 |
 
 ---
 
