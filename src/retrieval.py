@@ -44,7 +44,21 @@ import numpy as np
 
 __all__ = ["Corpus", "search", "grade", "SKIP_TITLE"]
 
-COL = "embedding_oa"
+# 어느 임베딩을 볼 것인가.
+#
+#     embedding      CLOVA v2 (bge-m3) 1,024차원
+#     embedding_oa   OpenAI text-embedding-3-large 3,072차원
+#
+# CLOVA 를 쓴다. 2026-09-06 실측으로 둘 중 어느 쪽을 써도 검색 결과가 같았다.
+# 질의 37건에서 1위 적중이 27 로 같고 8위 안에 드는 것은 CLOVA 가 하나 많았다.
+# 30건 세트에서도 21 로 같았다. 성능이 같다면 대회가 준 열쇠 하나만 쓰는
+# 쪽이 낫다. 평가 기간 14일 동안 관리할 외부 의존이 하나로 준다.
+#
+# CLOVA 는 75.3% 만 채웠다. 그래도 손실이 없는 이유는 아래 `Corpus` 가
+# 벡터 없는 조각을 후보에서 빼지 않기 때문이다. 벡터 순위에서만 빠지고
+# 낱말 순위에는 남아 있어 검색에서 사라지지 않는다.
+COL = "embedding"
+DIM = 1024
 
 # 후보에서 뺄 절. 검색 대상이 아니다.
 SKIP_TITLE = re.compile(r"^\s*(목\s*차|【.*확인.*】|전문가의 확인|"
@@ -280,7 +294,7 @@ class Corpus:
             JOIN document d ON c.doc_id = d.doc_id
             WHERE c.corp_code IN (SELECT corp_code FROM document
                                   WHERE corp_name IN ({q}))
-              AND c.{COL} IS NOT NULL AND c.tokens IS NOT NULL
+              AND c.tokens IS NOT NULL
               AND c.char_len >= ? AND d.doc_subtype = ?
               AND d.doc_group IN ({g})
               AND d.corp_name IN ({q})""",
@@ -294,8 +308,26 @@ class Corpus:
         self.ids = [r["chunk_id"] for r in rows]
         self.byid = {r["chunk_id"]: r for r in rows}
         self.pos = {c: i for i, c in enumerate(self.ids)}
-        self.M = np.vstack([np.frombuffer(r["v"], dtype=np.float32)
-                            for r in rows]) if rows else np.zeros((0, 3072))
+
+        # 벡터가 없는 조각도 후보에 남긴다.
+        #
+        # 전에는 SQL 에서 `embedding IS NOT NULL` 로 걸러 아예 안 실었다.
+        # OpenAI 는 100% 라 그래도 아무도 안 빠졌지만, CLOVA 는 75.3% 라
+        # 그대로 두면 24.7% 가 낱말 검색에서까지 사라진다.
+        #
+        # 실측으로 확인했다. 후보를 줄여 재면 1위 적중이 27 에서 23 으로
+        # 떨어지는데, 후보를 그대로 두고 벡터 순위에서만 빼면 27 로 같았다.
+        # 즉 손실의 원인은 임베딩 모델이 아니라 후보를 버린 것이었다.
+        #
+        # `has` 가 벡터를 가진 자리를 표시한다. 없는 자리는 0 벡터를 두는데,
+        # 0 벡터는 내적이 0 이라 순위에 끼면 중간쯤에 박힌다. 그래서 순위를
+        # 매길 때 `has` 로 걸러 아예 뺀다.
+        self.M = np.zeros((len(rows), DIM), dtype=np.float32)
+        self.has = np.zeros(len(rows), dtype=bool)
+        for i, r in enumerate(rows):
+            if r["v"] is not None:
+                self.M[i] = np.frombuffer(r["v"], dtype=np.float32)
+                self.has[i] = True
         self.sec = np.array([r["section_id"] for r in rows])
 
         latest: dict[str, int] = {}
@@ -343,11 +375,17 @@ def search(cp: Corpus, corp: str, qvec, terms: list[str],
     idx = cp.candidates(corp, year)
     if not len(idx):
         return []
-    qa = np.asarray(qvec, dtype=np.float32)
-    ov = idx[np.argsort(-(cp.M[idx] @ qa))]
+    # 벡터 순위는 벡터를 가진 조각으로만 매긴다. 나머지는 낱말 순위에 남는다.
+    vec = idx[cp.has[idx]]
+    if qvec is None or weights[0] == 0 or not len(vec):
+        ov = np.array([], dtype=int)
+    else:
+        qa = np.asarray(qvec, dtype=np.float32)
+        ov = vec[np.argsort(-(cp.M[vec] @ qa))]
+
     sc = cp.bm25(corp, year).get_scores(terms or ["없음"])
     ob = idx[np.argsort(-sc)]
-    if weights[0] == 0:
+    if not len(ov) or weights[0] == 0:
         order = list(ob)
     elif weights[1] == 0:
         order = list(ov)

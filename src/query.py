@@ -158,6 +158,7 @@ class Query:
     corps: list[str] = field(default_factory=list)
     sectors: list[str] = field(default_factory=list)
     markets: list[str] = field(default_factory=list)
+    groups: list[str] = field(default_factory=list)   # 삼성 그룹 · SK 그룹 …
     years: list[int] = field(default_factory=list)
     dates: list[str] = field(default_factory=list)
     subtype: str | None = None
@@ -207,13 +208,96 @@ def _universe():
         "포스코": "POSCO홀딩스", "케이비금융": "KB금융",
         "엘지에너지솔루션": "LG에너지솔루션", "엘지화학": None,
         "한화에어로": "한화에어로스페이스", "삼바": "삼성바이오로직스",
+        # 코퍼스가 한글로 적은 이름을 사람은 알파벳으로 쓴다. 그 반대도 있다.
+        "LS일렉트릭": "엘에스일렉트릭", "엘에스": "엘에스일렉트릭",
+        "KT": "케이티", "SM": "에스엠", "SM엔터테인먼트": "에스엠",
+        "YG": "와이지엔터테인먼트", "YG엔터테인먼트": "와이지엔터테인먼트",
+        "LG CNS": "LG씨엔에스", "LGCNS": "LG씨엔에스",
+        "HYBE": "하이브", "LIG넥스원": "LIG디펜스앤에어로스페이스",
+        "KAI": "한국항공우주", "한국항공우주산업": "한국항공우주",
+        "삼성엔지니어링": "삼성E&A", "삼성E&C": None,
+        "SKT": "SK텔레콤", "LGU+": "LG유플러스", "엘지유플러스": "LG유플러스",
+        "포스코홀딩스": "POSCO홀딩스", "미래에셋": "미래에셋증권",
+        "한화에어로스페이스㈜": "한화에어로스페이스",
     }.items():
         if real and real in set(u["corp_name"]):
             name2corp.setdefault(alias, real)
     names = sorted(name2corp, key=len, reverse=True)
-    sectors = sorted(u["sector"].dropna().unique(), key=len, reverse=True)
+    sectors = sorted(set(u["sector"].dropna()) | set(u["industry"].dropna()),
+                     key=len, reverse=True)
     markets = sorted(u["market"].dropna().unique())
     return name2corp, names, sectors, markets
+
+
+@lru_cache(maxsize=1)
+def all_names() -> frozenset:
+    """코퍼스 70곳의 이름과 통칭 전부. 답변에 나온 기업을 검사할 때 쓴다."""
+    return frozenset(_universe()[0])
+
+
+@lru_cache(maxsize=1)
+def _master() -> list[dict]:
+    """기업 70곳의 시장·업종·시가총액. 대상 기업을 추릴 때 쓴다.
+
+    시가총액을 함께 들고 오는 이유가 있다. "코스피 기업 중" 처럼 61곳이
+    걸리는 질의가 있는데 그걸 다 훑을 수는 없다. 큰 곳부터 자른다.
+    """
+    from corpus import load_universe
+    out = []
+    for _, r in load_universe().iterrows():
+        try:
+            cap = float(r.get("market_cap") or 0)
+        except (TypeError, ValueError):
+            cap = 0.0
+        out.append({"corp": str(r["corp_name"]),
+                    "market": str(r.get("market") or ""),
+                    "sector": str(r.get("sector") or ""),
+                    "industry": str(r.get("industry") or ""),
+                    "cap": cap})
+    return out
+
+
+def scope_corps(q: "Query", limit: int = 6) -> tuple[list[str], str]:
+    """기업 이름이 없는 질의에서 볼 기업을 정한다. (기업 목록, 고른 방법).
+
+    "코스닥 기업 중" · "전력기기 산업" · "삼성 그룹" 처럼 이름 대신 무리를
+    가리키는 질의가 있다. 이름을 못 찾았다고 그 자리에서 포기하면 답이 아예
+    안 나가는데, 이 셋은 기업 마스터만으로 무리를 특정할 수 있다.
+
+    좁은 조건부터 본다. 그룹이 가장 좁고 시장이 가장 넓다. 여럿이 걸리면
+    시가총액 순으로 자른다. 무엇으로 골랐는지 함께 돌려주어 답변과
+    think_trace 에 밝힐 수 있게 한다. 임의로 추린 사실을 숨기지 않는다.
+    """
+    m = _master()
+    picked: list[dict] = []
+    why = ""
+
+    if q.groups:
+        # 그룹 이름도 대소문자를 가리지 않는다. "sk 그룹" 이 그대로 들어온다.
+        gl = [g.lower() for g in q.groups]
+        picked = [r for r in m
+                  if any(r["corp"].lower().startswith(g) for g in gl)]
+        why = f"그룹 {'·'.join(q.groups)}"
+    if not picked and q.sectors:
+        want = set(q.sectors)
+        picked = [r for r in m
+                  if r["sector"] in want or r["industry"] in want]
+        why = f"업종 {'·'.join(q.sectors)}"
+    if not picked and q.markets:
+        want = set(q.markets)
+        picked = [r for r in m if r["market"] in want]
+        why = f"시장 {'·'.join(q.markets)}"
+    if not picked:
+        return [], ""
+
+    picked.sort(key=lambda r: -r["cap"])
+    n = len(picked)
+    out = [r["corp"] for r in picked[:limit]]
+    if n > limit:
+        why += f" {n}곳 중 시가총액 상위 {limit}곳"
+    else:
+        why += f" {n}곳"
+    return out, why
 
 
 # 업종을 부르는 다른 말. universe 의 sector 값과 이어 준다.
@@ -231,6 +315,18 @@ SECTOR_ALIAS = {
 }
 MARKET_ALIAS = {"코스닥": "KOSDAQ", "코스피": "KOSPI",
                 "유가증권": "KOSPI", "유가증권시장": "KOSPI"}
+
+# 그룹을 부르는 말을 기업 이름의 앞머리와 잇는다.
+#
+# 코퍼스에 그룹 열이 없다. 그래서 이름 앞머리로 묶는다. "삼성" 으로 시작하는
+# 8곳이 삼성 그룹이 되는 식이다. 지주회사 체제와 정확히 일치하지는 않지만,
+# 사람이 "삼성 그룹" 이라고 말할 때 떠올리는 범위와는 대체로 맞는다.
+# 이름과 그룹명이 다른 곳만 여기 적는다.
+GROUP_ALIAS = {
+    "현대차": "현대", "현대자동차": "현대", "기아": "현대",
+    "포스코": "POSCO", "엘지": "LG", "에스케이": "SK", "지에스": "GS",
+    "에이치디현대": "HD현대", "씨제이": "CJ",
+}
 
 
 def _find_years(text: str) -> list[int]:
@@ -257,40 +353,57 @@ def parse(text: str) -> Query:
     q = Query(raw=text)
     rest = text
 
+    # 0  그룹. 기업 이름을 지우기 전에 원문에서 본다.
+    #
+    # "현대자동차그룹" 은 아래 1 에서 "현대자동차" 가 먼저 지워져 "그룹"
+    # 만 남는다. 그러면 무슨 그룹인지 알 수 없게 되므로 여기서 먼저 잡는다.
+    # 잡아만 두고 쓰지는 않는다. 기업 이름을 하나도 못 찾았을 때만 쓴다.
+    for m in re.finditer(r"([가-힣A-Za-z]{2,10})\s*(?:그룹|계열사|계열)", text):
+        w = m.group(1)
+        g = GROUP_ALIAS.get(w) or GROUP_ALIAS.get(w.lower()) \
+            or GROUP_ALIAS.get(w.upper()) or w
+        if g not in q.groups:
+            q.groups.append(g)
+
     # 1  기업. 긴 이름부터 찾아 지운다
     #
     # 이름 뒤에 붙은 조사도 함께 지운다. "삼성전자가" 에서 이름만 빼면
     # 남은 "가" 가 다음 낱말에 붙어 "가 공시한" → "가공시" 로 잘린다.
+    #
+    # 대소문자를 가리지 않는다. 사람은 "lg생활건강" · "sk하이닉스" · "kb금융"
+    # 처럼 쓴다. 글자 그대로 맞춰 보면 이런 질의에서 기업을 하나도 못 찾아
+    # 답이 아예 안 나간다. 2026-09-06 파트너 시험에서 나온 문제다.
     for n in names:
-        if n in rest:
+        if re.search(re.escape(n), rest, re.I):
             c = name2corp[n]
             if c not in q.corps:
                 q.corps.append(c)
             rest = re.sub(re.escape(n) + r"(이|가|은|는|을|를|의|와|과|에서|에|도|만)?",
-                          " ", rest)
+                          " ", rest, flags=re.I)
 
     # 2  업종·시장
     #
     # 업종은 "산업" · "업종" · "기업" 이 뒤에 붙을 때만 인정한다. 그러지
     # 않으면 "반도체 위탁생산" 같은 제품 설명이 업종 필터로 잡힌다.
     # 실제로 문항 2 에서 그렇게 잘못 잡혔다.
+    # 여기도 대소문자를 가리지 않는다. "kospi 기업 중" 이 그대로 들어온다.
+    tail = r"\s*(산업|업종|업체|기업|회사|섹터|분야)"
     for s in sectors:
-        if re.search(re.escape(s) + r"\s*(산업|업종|업체|기업|회사|섹터|분야)", rest):
+        if re.search(re.escape(s) + tail, rest, re.I):
             q.sectors.append(s)
-            rest = rest.replace(s, " ")
+            rest = re.sub(re.escape(s), " ", rest, flags=re.I)
     for a, real in SECTOR_ALIAS.items():
-        if re.search(re.escape(a) + r"\s*(산업|업종|업체|기업|회사|섹터|분야)", rest) \
-                and real not in q.sectors:
+        if re.search(re.escape(a) + tail, rest, re.I) and real not in q.sectors:
             q.sectors.append(real)
-            rest = rest.replace(a, " ")
+            rest = re.sub(re.escape(a), " ", rest, flags=re.I)
     for a, real in MARKET_ALIAS.items():
-        if a in rest and real not in q.markets:
+        if re.search(re.escape(a), rest, re.I) and real not in q.markets:
             q.markets.append(real)
-            rest = rest.replace(a, " ")
+            rest = re.sub(re.escape(a), " ", rest, flags=re.I)
     for m in markets:
-        if m in rest and m not in q.markets:
+        if re.search(re.escape(m), rest, re.I) and m not in q.markets:
             q.markets.append(m)
-            rest = rest.replace(m, " ")
+            rest = re.sub(re.escape(m), " ", rest, flags=re.I)
 
     # 3  날짜와 연도
     for m in re.finditer(r"20\d\d년\s*\d{1,2}월\s*\d{1,2}일", text):

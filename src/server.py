@@ -168,7 +168,21 @@ def as_text(trace: list[dict]) -> str:
 
 @app.on_event("startup")
 def warm() -> None:
-    print(f"기동. 미리 올릴 기업 {len(WARM)}곳", flush=True)
+    """기동할 때 무거운 준비를 미리 끝낸다.
+
+    질의 해석은 계산이 가볍지만 처음 부를 때 형태소 분석기(kiwipiepy)와
+    기업 마스터(pandas)를 메모리에 올린다. 그 비용이 노트북 실측으로 13.7초다.
+    아무것도 안 하면 그 13.7초가 심사자가 던지는 첫 질의에 통째로 붙는다.
+
+    실측. 같은 프로세스에서 두 번 던지면 20.4초와 6.7초였다. 차이가 전부
+    이 준비 비용이다. 기동을 13초 늦추고 모든 질의를 6.7초로 만드는 쪽이 낫다.
+    기동은 하루에 몇 번이고 질의는 수백 번이다.
+    """
+    t0 = time.time()
+    Q.parse("삼성전자의 배당에 관한 사항을 알려줘")
+    print(f"기동. 질의 해석 준비 {time.time() - t0:.1f}초", flush=True)
+
+    print(f"   미리 올릴 기업 {len(WARM)}곳", flush=True)
     for c in WARM:
         t0 = time.time()
         get_corpus([c], "annual")
