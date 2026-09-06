@@ -50,6 +50,25 @@ import sys
 import threading
 import time
 from collections import OrderedDict
+
+# 표준 출력을 UTF-8 로 고정한다. 임포트보다 먼저 해야 한다.
+#
+# 작업 스케줄러가 SYSTEM 계정으로 서버를 띄우고 출력을 파일로 넘기면,
+# 파이썬이 콘솔 기본 코드페이지(윈도 영문 환경에서 cp1252)로 인코딩한다.
+# 로그에 한글이 들어가는 순간 UnicodeEncodeError 로 죽는다.
+#
+# 2026-09-06 서버 기동 실패의 원인이 이것이었다. 사람이 손으로 띄울 때는
+# 콘솔이 UTF-8 이라 멀쩡했고, 자동 재시작으로 넘긴 순간에만 터졌다.
+# 기동 로그뿐 아니라 요청마다 찍는 질의 로그에도 한글이 들어가므로,
+# 고치지 않으면 모든 요청이 500 으로 끝난다.
+#
+# errors="replace" 를 두는 이유는 로그 한 줄 때문에 서버가 죽는 일을
+# 어떤 경우에도 막기 위해서다. 못 쓰는 글자는 물음표가 되면 그만이다.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
