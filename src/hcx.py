@@ -139,9 +139,26 @@ class Chat:
                 raw = e.read().decode("utf-8", "replace")[:200]
                 last = f"HTTP {e.code}: {raw}"
                 if e.code == 429:
+                    # 한도를 넘었다. 넉넉히 기다린다.
+                    #
+                    # 전에는 최대 8초까지만 기다렸다. CLOVA 는 Retry-After 를
+                    # 안 보내고 한도 창이 60초라, 네 번을 15초 안에 다 써 버리고
+                    # "답변 생성에 실패했다" 로 끝났다. 2026-09-06 자체 평가
+                    # 28문항을 잇달아 던졌을 때 문항 11이 그렇게 죽었다.
+                    #
+                    # 평가 기간에 심사자가 질의를 몰아 던지면 같은 일이 난다.
+                    # 임베딩 쪽에서 이미 겪고 고친 것과 같은 문제다.
                     self.n_429 += 1
                     wait = e.headers.get("Retry-After")
-                    time.sleep(float(wait) if wait else min(8, 2 ** i))
+                    reset = e.headers.get("x-ratelimit-reset-requests") \
+                        or e.headers.get("x-ratelimit-reset-tokens")
+                    if wait:
+                        sec = float(wait)
+                    elif reset and str(reset).rstrip("s").replace(".", "").isdigit():
+                        sec = float(str(reset).rstrip("s")) + 1
+                    else:
+                        sec = min(65.0, 15.0 * (i + 1))
+                    time.sleep(min(65.0, sec))
                     continue
                 if e.code >= 500:
                     time.sleep(min(20, 2 ** i))

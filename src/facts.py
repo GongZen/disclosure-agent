@@ -112,9 +112,10 @@ class Fact:
 
     def amount(self) -> str:
         """보고서에 적힌 대로. 원 단위 환산도 함께 보인다."""
+        from events import han
         if self.raw is not None and self.unit:
-            return f"{self.raw:,} {self.unit} ({self.value:,} 원)"
-        return f"{self.value:,} 원"
+            return f"{self.raw:,} {self.unit} ({self.value:,} 원 = {han(self.value)}원)"
+        return f"{self.value:,} 원 ({han(self.value)}원)"
 
     def line(self) -> str:
         p = {"annual": "연간", "cumulative": "누적", "quarter": "분기"}.get(

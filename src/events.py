@@ -57,7 +57,8 @@ TRIGGER: list[tuple[tuple[str, ...], str, str]] = [
     (("전환사채", "신주인수권부사채", "교환사채", "영구채", "조건부자본증권",
       "사채발행", "자금조달"), "major", "사채"),
     (("자기주식", "자사주"), "major", "자기주식"),
-    (("합병", "분할", "영업양수", "영업양도", "감자결정", "주식교환"), "major", "구조"),
+    (("감자", "감자결정"), "major", "감자"),
+    (("합병", "분할", "영업양수", "영업양도", "주식교환"), "major", "구조"),
     # 지분공시
     (("대량보유", "5%", "지분 변동", "지분율", "보유상황보고", "주식등의대량보유"),
      "holding", "holding"),
@@ -122,8 +123,32 @@ class Event:
         return " · ".join(f"{k} {v}" for k, v in self.fields if v)
 
 
+def han(v: int) -> str:
+    """조·억 단위 표기를 함께 만든다. 22764764160000 → 22조 7,647억"""
+    n = abs(int(v))
+    jo, rest = divmod(n, 10 ** 12)
+    eok = rest // 10 ** 8
+    if jo and eok:
+        return f"{jo:,}조 {eok:,}억"
+    if jo:
+        return f"{jo:,}조"
+    if eok:
+        return f"{eok:,}억"
+    man = n // 10 ** 4
+    return f"{man:,}만" if man else f"{n:,}"
+
+
 def _won(v) -> str:
-    return f"{int(v):,}원" if v not in (None, "", 0) else ""
+    """숫자와 조·억 표기를 함께 준다.
+
+    모델이 원 단위를 억·십억으로 옮기다 자릿수를 틀린다. 실측에서
+    3,921,711,000,000원을 "3,921억 7,110만원" 으로, 4,965,798,552,980원을
+    "4,965,798십억 원" 으로 적었다. 우리가 미리 환산해 주면 모델이 옮겨
+    적기만 하면 된다. 계산을 모델에게 시키지 않는다.
+    """
+    if v in (None, "", 0):
+        return ""
+    return f"{int(v):,}원 ({han(v)}원)"
 
 
 def _date(v) -> str:
@@ -212,7 +237,10 @@ WHERE = {
     "termination": "e.event_type = 'termination'",
     "investment": "e.event_type = 'investment'",
     "holding": "1=1",
-    "증자": "e.major_kind LIKE '%증자결정%' OR e.major_kind LIKE '%감자결정%'",
+    # 증자와 감자를 가른다. 한데 묶으면 "유상증자를 공시했나" 에 감자결정이
+    # 걸려 엉뚱한 답이 나온다. 실측에서 자체제작 6이 그랬다.
+    "증자": "e.major_kind LIKE '%유상증자%' OR e.major_kind LIKE '%무상증자%'",
+    "감자": "e.major_kind LIKE '%감자결정%'",
     "사채": "e.major_kind LIKE '%사채%' OR e.major_kind LIKE '%자본증권%'",
     "자기주식": "e.major_kind LIKE '자기주식%' OR e.major_kind LIKE '자기전환사채%'",
     "구조": ("e.major_kind LIKE '%합병%' OR e.major_kind LIKE '%분할%'"
